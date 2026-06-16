@@ -1,5 +1,7 @@
 default_platform(:ios)
 
+require_relative "changelog_formatter"
+
 # match storage repo (Matchfile isn't imported via import_from_git, so set it here).
 MATCH_GIT_URL = ENV["MATCH_GIT_URL"] || "git@github.com:cakuki/ios-signing.git"
 
@@ -66,13 +68,13 @@ platform :ios do
       api_key:                           key,
       app_identifier:                    app_id,
       skip_waiting_for_build_processing: true,
-      changelog: (File.exist?("../CHANGELOG.md") ? changelog_from_md : "Automated build")
+      changelog: changelog_from_md
     )
   end
 end
 
+# Top CHANGELOG.md section -> clean TestFlight notes (or "Automated build").
+# Logic lives in changelog_formatter.rb so it's unit-tested without fastlane.
 def changelog_from_md
-  raw = File.read("../CHANGELOG.md")
-  m = raw.match(/^## .*?\n\n(.*?)(?=\n##|\n# |\z)/m)
-  (m ? m[1] : "Automated build").gsub(/^####\s+/, "").gsub(/^-\s+/, "• ").strip
+  ChangelogFormatter.from_file("../CHANGELOG.md")
 end

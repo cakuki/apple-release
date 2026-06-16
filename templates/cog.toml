@@ -1,0 +1,26 @@
+# Canonical Conventional-Commits / changelog config for Atelier apps.
+# https://docs.cocogitto.io/reference/config.html
+#
+# This is the single source of truth (promoted from LoopApp). New apps inherit a
+# copy of this file (EPIC-01 template / EPIC-02 task 6) rather than hand-rolling one.
+#
+# Commit-type -> semver bump (cocogitto defaults): feat -> minor, fix -> patch,
+# a `!`/`BREAKING CHANGE` footer -> major. Only user-facing types appear in the
+# changelog; housekeeping types are omitted so release notes stay clean.
+
+[changelog]
+path = "CHANGELOG.md"
+template = "default"
+
+[commit_types]
+feat = { changelog_title = "Features" }
+fix = { changelog_title = "Bug Fixes" }
+perf = { changelog_title = "Performance" }
+docs = { omit_from_changelog = true }
+style = { omit_from_changelog = true }
+refactor = { omit_from_changelog = true }
+test = { omit_from_changelog = true }
+build = { omit_from_changelog = true }
+ci = { omit_from_changelog = true }
+chore = { omit_from_changelog = true }
+revert = { omit_from_changelog = true }

@@ -1,0 +1,7 @@
+#!/bin/sh
+# Atelier canonical commit-msg hook: enforce Conventional Commits locally.
+# Install per app by pointing core.hooksPath at the dir holding this file, e.g.
+#   git config core.hooksPath .githooks
+# The authoritative gate is the CI lint check (EPIC-02 task 2); this hook is the
+# fast local feedback loop and is opt-in.
+cog verify "$(cat "$1")"
