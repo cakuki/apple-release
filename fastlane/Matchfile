@@ -1,0 +1,4 @@
+git_url("git@github.com:cakuki/ios-signing.git")
+storage_mode("git")
+type("appstore")
+# app_identifier and api_key are passed at call time so this file stays app-agnostic.

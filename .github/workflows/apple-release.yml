@@ -1,0 +1,95 @@
+name: apple-release
+
+on:
+  workflow_call:
+    inputs:
+      app-identifier:
+        description: "App bundle identifier"
+        required: true
+        type: string
+      scheme:
+        description: "Xcode scheme to build"
+        required: true
+        type: string
+      xcodeproj:
+        description: "Path to the .xcodeproj"
+        required: true
+        type: string
+      lane:
+        description: "Fastlane lane to run"
+        required: false
+        type: string
+        default: "beta"
+      xcode-version:
+        description: "Xcode version to select (Apple requires the latest SDK for uploads)"
+        required: false
+        type: string
+        default: "26.3"
+      test-device:
+        description: "Simulator device for tests"
+        required: false
+        type: string
+        default: "iPhone 16"
+      ruby-version:
+        description: "Ruby version for fastlane"
+        required: false
+        type: string
+        default: "3.3"
+    secrets:
+      MATCH_PASSWORD:
+        required: true
+      MATCH_GIT_PRIVATE_KEY:
+        required: true
+      ASC_KEY_ID:
+        required: true
+      ASC_ISSUER_ID:
+        required: true
+      ASC_KEY_P8_BASE64:
+        required: true
+
+jobs:
+  release:
+    runs-on: macos-15
+    env:
+      APP_IDENTIFIER: ${{ inputs.app-identifier }}
+      SCHEME: ${{ inputs.scheme }}
+      XCODEPROJ: ${{ inputs.xcodeproj }}
+      TEST_DEVICE: ${{ inputs.test-device }}
+      MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          XC="/Applications/Xcode_${{ inputs.xcode-version }}.app"
+          [ -d "$XC" ] || XC="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)"
+          [ -n "$XC" ] || XC="$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)"
+          echo "Selecting $XC"
+          sudo xcode-select -s "$XC"
+          xcodebuild -version
+
+      - name: Set up SSH agent for match
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.MATCH_GIT_PRIVATE_KEY }}
+
+      - name: Add github.com to known_hosts
+        run: ssh-keyscan github.com >> ~/.ssh/known_hosts
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ inputs.ruby-version }}
+          bundler-cache: true
+
+      - name: Cache DerivedData
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Developer/Xcode/DerivedData
+          key: deriveddata-${{ runner.os }}-${{ hashFiles('**/*.xcodeproj/**', '**/Package.resolved') }}
+
+      - name: Run fastlane
+        run: bundle exec fastlane ${{ inputs.lane }}
