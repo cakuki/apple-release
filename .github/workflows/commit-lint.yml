@@ -22,6 +22,13 @@ jobs:
       # Pinned cocogitto version — mirrors the SDK/Xcode-pinning discipline; an
       # unpinned cog could silently change `cog check` behaviour between runs.
       COG_VERSION: "6.5.0"
+      # sha256 of cocogitto-${COG_VERSION}-x86_64-unknown-linux-musl.tar.gz,
+      # computed from the asset downloaded from the cocogitto 6.5.0 GitHub
+      # Release. Verified before extraction to authenticate the bytes (the
+      # version check only confirms the reported version). This digest is
+      # specific to that one asset and MUST be updated whenever COG_VERSION
+      # changes.
+      COG_SHA256: "9de1086c8b6521a8a01abbd62c562d6d355990f542e3082b49ec4a597f925646"
     steps:
       - name: Checkout (full history)
         uses: actions/checkout@v4
@@ -55,6 +62,7 @@ jobs:
           # a failed download is a hard error (no cargo fallback — a source build would
           # be unpinned/non-deterministic, defeating the point of this pin).
           COG_VERSION: ${{ env.COG_VERSION }}
+          COG_SHA256: ${{ env.COG_SHA256 }}
         run: |
           set -euo pipefail
           mkdir -p "$HOME/.local/bin"
@@ -73,6 +81,15 @@ jobs:
           url="https://github.com/cocogitto/cocogitto/releases/download/${COG_VERSION}/cocogitto-${COG_VERSION}-x86_64-unknown-linux-musl.tar.gz"
           if ! curl -sSfL "$url" -o "$workdir/cog.tar.gz"; then
             echo "::error::Failed to download pinned cog ${COG_VERSION} prebuilt asset from $url. No cargo fallback by design (would be unpinned); failing loudly."
+            exit 1
+          fi
+          # Authenticate the downloaded bytes against the pinned sha256 BEFORE
+          # extracting — a version check alone only confirms the reported version,
+          # not that the bytes are untampered. Mismatch is a hard error; ::error::
+          # goes to stdout so GitHub renders it.
+          actual="$(shasum -a 256 "$workdir/cog.tar.gz" | awk '{print $1}')"
+          if [ "$actual" != "${COG_SHA256}" ]; then
+            echo "::error::cog tarball sha256 mismatch (expected ${COG_SHA256}, got ${actual}) — refusing to extract"
             exit 1
           fi
           tar -xzf "$workdir/cog.tar.gz" -C "$workdir"

@@ -84,8 +84,24 @@ jobs:
           # a failed download is a hard error (no cargo fallback — a source build would
           # be unpinned/non-deterministic, defeating the point of this pin).
           COG_VERSION: ${{ inputs.cog-version }}
+          # The pinned sha256 below is for ONE specific asset: cocogitto
+          # COG_SHA256_VERSION, x86_64-unknown-linux-musl. cog-version + digest are a
+          # coupled pair and MUST be updated together. This workflow exposes
+          # `cog-version` as an input, but the hard-coded digest can't follow a
+          # caller-supplied version, so the run step hard-fails when the requested
+          # cog-version doesn't match the version this digest was computed for —
+          # rather than emit a misleading "sha256 mismatch" on bytes that are correct.
+          COG_SHA256_VERSION: "6.5.0"
+          COG_SHA256: "9de1086c8b6521a8a01abbd62c562d6d355990f542e3082b49ec4a597f925646"
         run: |
           set -euo pipefail
+          # The pinned COG_SHA256 is valid only for COG_SHA256_VERSION. If a caller
+          # overrides cog-version to anything else there is no pinned digest for it —
+          # fail loudly and clearly here, not later as a confusing checksum mismatch.
+          if [ "${COG_VERSION}" != "${COG_SHA256_VERSION}" ]; then
+            echo "::error::cog-version '${COG_VERSION}' has no pinned sha256 (COG_SHA256 is pinned for ${COG_SHA256_VERSION}). Update COG_SHA256 + COG_SHA256_VERSION together to change the version."
+            exit 1
+          fi
           mkdir -p "$HOME/.local/bin"
           # Download + extract the pinned cog release into a temp dir
           # (RUNNER_TEMP, or /tmp as a fallback) and add it to PATH for this job.
@@ -102,6 +118,15 @@ jobs:
           url="https://github.com/cocogitto/cocogitto/releases/download/${COG_VERSION}/cocogitto-${COG_VERSION}-x86_64-unknown-linux-musl.tar.gz"
           if ! curl -sSfL "$url" -o "$workdir/cog.tar.gz"; then
             echo "::error::Failed to download pinned cog ${COG_VERSION} prebuilt asset from $url. No cargo fallback by design (would be unpinned); failing loudly."
+            exit 1
+          fi
+          # Authenticate the downloaded bytes against the pinned sha256 BEFORE
+          # extracting — a version check alone only confirms the reported version,
+          # not that the bytes are untampered. Mismatch is a hard error; ::error::
+          # goes to stdout so GitHub renders it.
+          actual="$(shasum -a 256 "$workdir/cog.tar.gz" | awk '{print $1}')"
+          if [ "$actual" != "${COG_SHA256}" ]; then
+            echo "::error::cog tarball sha256 mismatch (expected ${COG_SHA256}, got ${actual}) — refusing to extract"
             exit 1
           fi
           tar -xzf "$workdir/cog.tar.gz" -C "$workdir"
