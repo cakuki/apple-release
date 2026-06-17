@@ -1,6 +1,8 @@
 default_platform(:ios)
 
 require_relative "changelog_formatter"
+require_relative "release_plan"
+require_relative "version_bumper"
 
 # match storage repo (Matchfile isn't imported via import_from_git, so set it here).
 MATCH_GIT_URL = ENV["MATCH_GIT_URL"] || "git@github.com:cakuki/ios-signing.git"
@@ -27,6 +29,110 @@ platform :ios do
     setup_ci
     match(type: o[:type] || "appstore", readonly: is_ci, api_key: asc_api_key,
           app_identifier: ENV.fetch("APP_IDENTIFIER"), git_url: MATCH_GIT_URL)
+  end
+
+  desc "Cut a release: regen CHANGELOG.md, bump MARKETING_VERSION (semver), tag v<semver>"
+  lane :prepare_release do
+    # Resolve the last `v*` release tag REACHABLE FROM HEAD (empty on the very
+    # first release) and the commit subjects since it. The pure ReleasePlan turns
+    # those into the cog range, the next semver, and the v<semver> tag —
+    # VersionBumper does the actual level->bump (reused, not re-implemented here).
+    #
+    # Use `git describe --tags --abbrev=0` (NOT `git tag --list --sort`): the
+    # latter picks the highest `v*` tag anywhere in the repo even if it's on an
+    # unrelated branch and NOT an ancestor of HEAD, which would yield the wrong
+    # changelog range and baseline version. `describe` walks back from HEAD and
+    # returns the nearest *reachable* tag. `--abbrev=0` gives the bare tag name
+    # (no `-<n>-g<sha>` suffix); `--match 'v*'` restricts to release tags.
+    # On the first release there is no reachable tag, so `describe` exits non-zero
+    # — `error_callback` swallows that into an empty string (handled downstream).
+    last_tag = sh(
+      ["git", "describe", "--tags", "--abbrev=0", "--match", "v*", "HEAD"],
+      log: false,
+      error_callback: ->(_) {}
+    ).to_s.strip
+    range    = ReleasePlan.changelog_range(last_tag)
+    subjects = sh(["git", "log", "--no-merges", "--format=%s", range], log: false)
+               .split("\n").map(&:strip).reject(&:empty?)
+
+    plan = ReleasePlan.plan(last_tag: last_tag.empty? ? nil : last_tag, subjects: subjects)
+    unless plan[:release?]
+      UI.important("No releasing commits since #{last_tag.empty? ? 'init' : last_tag}; nothing to cut.")
+      next
+    end
+
+    version = plan[:next_version]
+    tag     = plan[:tag]
+    UI.message("Cutting #{tag} (was #{plan[:current_version]}) over range #{plan[:range]}")
+
+    # 1) Regenerate CHANGELOG.md: prepend the dated section for this range. cog's
+    #    cog.toml drives the section format; pinned cog version is set by CI.
+    #    Capture cog's output directly (no temp file) to avoid CWD path mismatches:
+    #    fastlane runs from `fastlane/`, so the repo lives one level up (`../`).
+    new_section = sh(["cog", "changelog", plan[:range]], log: false)
+    existing    = File.exist?("../CHANGELOG.md") ? File.read("../CHANGELOG.md") : ""
+    File.write("../CHANGELOG.md", "#{new_section.strip}\n\n#{existing}".strip + "\n")
+
+    # 2) Bump MARKETING_VERSION (semver) in the app's xcodegen project.yml via the
+    #    pure rewriter. CURRENT_PROJECT_VERSION is intentionally NOT touched — it
+    #    stays the stateless TestFlight-latest+1 injected by `beta` via xcargs.
+    project_yml = ENV["PROJECT_YML"] || "project.yml"
+    path = "../#{project_yml}"
+    # Fail fast: the v<semver> tag is meaningless without the matching
+    # MARKETING_VERSION bump it's supposed to pair with. If project.yml is
+    # missing we must NOT proceed to commit + tag (that would create a tag with
+    # no version bump and break the tag/version coupling consumers rely on).
+    UI.user_error!(
+      "#{project_yml} not found at repo root; cannot bump MARKETING_VERSION. " \
+      "Set PROJECT_YML / project-yml to the correct path. Aborting before commit+tag."
+    ) unless File.exist?(path)
+    rewritten = VersionBumper.set_marketing_version(File.read(path), version)
+    # Fail fast on the silent no-op: set_marketing_version is a gsub, so a
+    # missing/misspelled MARKETING_VERSION key leaves the content unchanged and
+    # the bump never happens. Verify the rewritten content genuinely carries
+    # `MARKETING_VERSION: "<version>"` BEFORE we write/commit/tag — otherwise the
+    # v<semver> tag would pair with no version bump.
+    UI.user_error!(
+      "MARKETING_VERSION was not bumped to #{version} in #{project_yml}: no " \
+      "`MARKETING_VERSION:` key found (missing or misspelled), so the rewrite " \
+      "was a no-op. Aborting before commit+tag to avoid tagging without a bump."
+    ) unless VersionBumper.marketing_version_set?(rewritten, version)
+    File.write(path, rewritten)
+
+    # 3) Commit the regen + bump, create the v<semver> tag. The tag push triggers
+    #    the `beta` lane (see apple-release.yml `on: push: tags: ['v*']`). All git
+    #    ops run with `-C ..` (repo root) so they match the `../`-relative files
+    #    written above — the files were modified at the repo root, so staging them
+    #    from `fastlane/` would silently stage nothing and tag the wrong commit.
+    # Stage only the paths we touched (CHANGELOG.md + project.yml). project.yml is
+    # guaranteed to exist here — `prepare_release` already `UI.user_error!`s above
+    # if it's missing — so no existence guard is needed. Both paths are
+    # repo-root-relative; build the list in Ruby (no shell).
+    add_paths = ["CHANGELOG.md", project_yml]
+    sh(["git", "-C", "..", "add", "-A", "--"] + add_paths)
+
+    # Decide the no-op case from the INDEX for *only* the intended paths, not the
+    # whole worktree: `status --porcelain` is non-empty for any untracked/unstaged
+    # file, so it would wrongly "see" changes that aren't ours (and miss the real
+    # question). `diff --cached --quiet -- <paths>` exits 0 iff nothing is staged
+    # for those paths -> genuine no-op, skip commit+tag; exit 1 -> staged, commit.
+    # Any *other* commit failure (identity, hooks, permissions) still raises and
+    # stops the lane before tagging, so `beta` never fires from a tag missing the
+    # changelog/bump.
+    nothing_staged = system(
+      "git", "-C", "..", "diff", "--cached", "--quiet", "--",
+      "CHANGELOG.md", project_yml
+    )
+    if nothing_staged
+      UI.important("No changelog/version changes staged for #{tag}; skipping commit + tag.")
+      next
+    end
+
+    sh(["git", "-C", "..", "commit", "-m", "chore(release): #{tag}"])
+    sh(["git", "-C", "..", "tag", tag])
+    UI.success("Prepared #{tag} (commit + tag created). In CI the release " \
+               "workflow pushes the commit + tag next, which triggers beta; " \
+               "running locally, push the tag yourself to trigger beta.")
   end
 
   desc "Build + upload to TestFlight"

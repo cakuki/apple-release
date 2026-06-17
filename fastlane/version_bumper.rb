@@ -48,4 +48,17 @@ module VersionBumper
       "#{Regexp.last_match(1)}\"#{version}\""
     end
   end
+
+  # project.yml text + expected version -> true iff the text actually carries a
+  # `MARKETING_VERSION: "<version>"` line for exactly that version. Pure.
+  #
+  # `set_marketing_version` is a gsub: if the key is missing or misspelled it
+  # silently no-ops, leaving project.yml unchanged. The lane calls this to
+  # confirm the bump landed (key present, now holding the new value) BEFORE it
+  # commits + tags — otherwise we'd cut a v<semver> tag with no version bump,
+  # breaking the tag/version coupling consumers rely on. The match anchors the
+  # full quoted value so "2.0.0" is never satisfied by "12.0.0".
+  def marketing_version_set?(project_yml, version)
+    !(project_yml =~ /^\s*MARKETING_VERSION:[ \t]*"#{Regexp.escape(version)}"\s*$/).nil?
+  end
 end

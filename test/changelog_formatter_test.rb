@@ -52,6 +52,32 @@ class ChangelogFormatterTest < Minitest::Test
     assert_nil ChangelogFormatter.top_section("just prose, no headings here")
   end
 
+  # Edge case: the first "## " header is immediately followed by another header
+  # with NO content line between them (empty top section). The next header must
+  # terminate the captured region even though it sits at the very START of the
+  # capture (i.e. it's NOT preceded by a "\n" inside the captured body). The top
+  # section is empty/whitespace and must NOT leak the second header's content.
+  def test_top_section_empty_first_section_does_not_leak_next_header
+    md = "## 1.2.0\n## 1.1.0\n- old"
+    section = ChangelogFormatter.top_section(md)
+    refute_nil section
+    assert_empty section.strip
+    refute_includes section, "## 1.1.0"
+    refute_includes section, "old"
+  end
+
+  # cog's `default` changelog template (EPIC-02, Task 5) emits the section body
+  # on the line *immediately* after the "## " header, with NO blank line between
+  # them (e.g. "## Unreleased (a..b)\n#### Features\n- x"). The formatter must
+  # still pick up that body so `beta` gets real notes from the regenerated file.
+  def test_top_section_handles_cog_default_no_blank_line_after_header
+    md = "## Unreleased (21c5cd8..8342447)\n#### Features\n- shiny thing - (21c5cd8) - t"
+    section = ChangelogFormatter.top_section(md)
+    refute_nil section
+    assert_includes section, "shiny thing"
+    refute_includes section, "## Unreleased"
+  end
+
   # --- notes: end-to-end on a string ---
 
   def test_notes_takes_top_section_only_and_cleans_it
@@ -71,6 +97,22 @@ class ChangelogFormatterTest < Minitest::Test
 
   def test_notes_fallback_when_section_is_blank
     assert_equal "Automated build", ChangelogFormatter.notes("## Build 1\n\n\n")
+  end
+
+  def test_notes_on_cog_default_output_produces_clean_notes
+    # The literal shape `cog changelog <range>` emits with the canonical cog.toml
+    # (h4 type headers, dash bullets, " - (hash) - committer" trailers).
+    md = "## Unreleased (21c5cd8..8342447)\n" \
+         "#### Features\n" \
+         "- shiny new feature - (21c5cd8) - t\n" \
+         "#### Bug Fixes\n" \
+         "- a small bug - (ce1b018) - t\n"
+    out = ChangelogFormatter.notes(md)
+    assert_includes out, "• shiny new feature"
+    assert_includes out, "• a small bug"
+    refute_includes out, "####"
+    refute_includes out, "21c5cd8"
+    refute_includes out, "Unreleased"
   end
 
   # --- from_file: IO wrapper + fallback ---
