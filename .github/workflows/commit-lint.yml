@@ -1,0 +1,69 @@
+# Commit-lint CI gate (EPIC-02, Task 2). The authoritative Conventional Commits
+# enforcement point: runs `cog check` over the PR's base..HEAD range and fails
+# CI on non-conventional commits. The local commit-msg hook is opt-in and NOT
+# authoritative; this is. Also runs the pure-core stdlib-minitest suite so the
+# shared Ruby modules stay green on every PR.
+#
+# This is a standalone `on: pull_request` workflow rather than a job in
+# apple-release.yml because that workflow is `workflow_call`-only (it can't
+# self-trigger on PRs), and this check needs no app inputs or signing secrets.
+name: commit-lint
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  commit-lint:
+    runs-on: ubuntu-latest
+    env:
+      # Pinned cocogitto version — mirrors the SDK/Xcode-pinning discipline; an
+      # unpinned cog could silently change `cog check` behaviour between runs.
+      COG_VERSION: "6.5.0"
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          # `cog check` resolves base..HEAD; the default shallow clone breaks
+          # range resolution on PRs, so fetch the full history.
+          fetch-depth: 0
+
+      - name: Set up Ruby (pinned)
+        # Don't depend on whatever Ruby the runner image ships — pin it so this
+        # gate stays stable as `ubuntu-latest` rolls. 3.3 matches the CI default
+        # used elsewhere in the platform.
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Run pure-core test suite
+        # stdlib-only suite, no bundler; Ruby pinned by the step above.
+        run: ruby test/all.rb
+
+      - name: Install cocogitto (pinned)
+        uses: cocogitto/cocogitto-action@v3
+        with:
+          version: ${{ env.COG_VERSION }}
+          check: false
+          check-latest-tag-only: false
+
+      - name: Resolve PR commit range
+        id: range
+        env:
+          GITHUB_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          GITHUB_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Make the PR base reachable as a remote-tracking ref for the range.
+          git fetch --no-tags origin "$GITHUB_BASE_REF"
+          RANGE="$(ruby fastlane/commit_range.rb)"
+          echo "Linting commit range: $RANGE"
+          echo "range=$RANGE" >> "$GITHUB_OUTPUT"
+
+      - name: cog check (Conventional Commits)
+        env:
+          # Pass the range via env, not direct ${{ }} interpolation, and quote it
+          # — avoids shell word-splitting/globbing and any expression injection.
+          RANGE: ${{ steps.range.outputs.range }}
+        run: cog --version && cog check "$RANGE"
