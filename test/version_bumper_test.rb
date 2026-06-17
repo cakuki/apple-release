@@ -105,6 +105,52 @@ class VersionBumperTest < Minitest::Test
     assert_equal once, twice
   end
 
+  # --- marketing_version_set?: pure predicate guarding the no-op gsub case ---
+  # `set_marketing_version` is a plain gsub: if the key is absent/misspelled it
+  # silently no-ops and returns the content unchanged. This predicate lets the
+  # lane verify the bump actually landed (key existed and now holds the new
+  # value) BEFORE it commits + tags, so we never cut a v<semver> tag whose
+  # MARKETING_VERSION wasn't bumped.
+
+  def test_marketing_version_set_true_when_value_present_quoted
+    assert VersionBumper.marketing_version_set?(%(MARKETING_VERSION: "2.0.0"), "2.0.0")
+  end
+
+  def test_marketing_version_set_true_after_rewrite
+    out = VersionBumper.set_marketing_version(%(MARKETING_VERSION: "1.0.0"), "2.0.0")
+    assert VersionBumper.marketing_version_set?(out, "2.0.0")
+  end
+
+  def test_marketing_version_set_true_indented
+    yml = <<~YML
+      settings:
+        base:
+          MARKETING_VERSION: "2.0.0"
+    YML
+    assert VersionBumper.marketing_version_set?(yml, "2.0.0")
+  end
+
+  def test_marketing_version_set_false_when_key_missing
+    # The smoking-gun case: no MARKETING_VERSION key at all (or misspelled),
+    # so set_marketing_version was a no-op. The lane must NOT proceed.
+    yml = <<~YML
+      settings:
+        base:
+          MARKETING_VERSON: "2.0.0"
+          PRODUCT_BUNDLE_IDENTIFIER: com.example.loop
+    YML
+    refute VersionBumper.marketing_version_set?(yml, "2.0.0")
+  end
+
+  def test_marketing_version_set_false_when_value_is_stale
+    refute VersionBumper.marketing_version_set?(%(MARKETING_VERSION: "1.0.0"), "2.0.0")
+  end
+
+  def test_marketing_version_set_does_not_match_substring_version
+    # "2.0.0" must not be considered set when the file holds "12.0.0" etc.
+    refute VersionBumper.marketing_version_set?(%(MARKETING_VERSION: "12.0.0"), "2.0.0")
+  end
+
   def test_set_marketing_version_preserves_surrounding_lines
     yml = <<~YML
       name: Loop

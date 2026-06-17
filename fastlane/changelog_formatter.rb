@@ -21,9 +21,24 @@ module ChangelogFormatter
     text.strip.gsub(/\n{3,}/, "\n\n")                                    # collapse blank runs
   end
 
-  # Extract the top (latest) "## " section body, or nil if none matches. Pure.
+  # Extract the top (latest) "## " section body, or nil if none matches. The
+  # blank line after the header is optional: hand-written changelogs put one
+  # there, but cog's `default` template (Task 5) emits the body on the very next
+  # line. `\n\n?` accepts both so `beta` gets real notes either way. Pure.
   def top_section(changelog)
-    m = changelog.match(/^## .*?\n\n(.*?)(?=\n##|\n# |\z)/m)
+    # Boundary is the next h2 (`## `) or h1 (`# `) section header, NOT `####`
+    # type sub-headers (which cog emits inside a section) — hence the trailing
+    # space, so `\n## ` doesn't also swallow-truncate at `\n#### Bug Fixes`.
+    #
+    # The boundary lookahead anchors each header to a LINE START via `^` (`/m`
+    # keeps `.` matching newlines while `^` still matches at every line start),
+    # so it can't match `## ` *inside* a `#### ` sub-header. Anchoring on `^`
+    # (rather than a literal `\n`) also terminates the capture at a header that
+    # sits at the VERY START of the captured body — the empty-first-section case
+    # where the first `## ` header is immediately followed by another `## `/`# `
+    # header with no content line between (a literal `\n## ` boundary would miss
+    # it and let that next header leak in).
+    m = changelog.match(/^## .*?\n\n?(.*?)(?=^## |^# |\z)/m)
     m && m[1]
   end
 

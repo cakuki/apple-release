@@ -1,0 +1,171 @@
+name: apple-release-prepare
+
+# Release-prep half of the tag-driven release flow (EPIC-02, Task 5). Distinct
+# from the macOS build: it regenerates CHANGELOG.md, derives the next semver and
+# bumps MARKETING_VERSION (via the pure VersionBumper), commits, and pushes a
+# `v<semver>` tag. That tag push is what triggers the existing `beta` build
+# (apple-release.yml with `lane: beta`, wired in the consumer's `on: push:
+# tags: ['v*']`). Prep needs no signing secrets or macOS, only cog + Ruby + a
+# token that can push the tag — so it runs cheaply on ubuntu.
+#
+# Reusable (`workflow_call`) and additive: the existing apple-release.yml
+# interface is unchanged, so `@v1` consumers (e.g. sample-ios-app) keep working.
+
+on:
+  workflow_call:
+    inputs:
+      project-yml:
+        description: "Path to the xcodegen project.yml whose MARKETING_VERSION is bumped"
+        required: false
+        type: string
+        default: "project.yml"
+      ruby-version:
+        description: "Ruby version for fastlane"
+        required: false
+        type: string
+        default: "3.3"
+      cog-version:
+        description: "Pinned cocogitto version for changelog regen"
+        required: false
+        type: string
+        default: "6.5.0"
+    secrets:
+      release-push-token:
+        # Optional PAT/app token used to push the release commit + v<semver> tag.
+        # Pushes made with the default GITHUB_TOKEN do NOT trigger other
+        # workflows, so the tag pushed below would never fire the consumer's
+        # `on: push: tags: ['v*']` beta flow. Authenticating the push with this
+        # token instead both triggers downstream workflows and (for a PAT/app
+        # with the right perms) can bypass branch protection on the push.
+        # Provisioned separately as PREP_PUSH_TOKEN (cakuki/atelier#30); optional
+        # so consumers that don't need the downstream trigger still work.
+        required: false
+
+permissions:
+  contents: write  # commit the changelog/bump and push the v<semver> tag
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_YML: ${{ inputs.project-yml }}
+    steps:
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          # The release range is <lastTag>..HEAD; a shallow clone hides prior
+          # tags and history, so fetch everything.
+          fetch-depth: 0
+          # Persist (and push with) release-push-token when provided so the
+          # commit + v<semver> tag push below authenticates with it. checkout
+          # stores this token in the local git config, so the later `git push`
+          # steps reuse it automatically. With the token, the tag push triggers
+          # the consumer's `on: push: tags: ['v*']` beta flow (and can bypass
+          # branch protection). WITHOUT it, the push falls back to the default
+          # GITHUB_TOKEN and the pushed tag will NOT trigger downstream workflows.
+          token: ${{ secrets.release-push-token || github.token }}
+
+      - name: Set up Ruby (pinned)
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ inputs.ruby-version }}
+          bundler-cache: true
+
+      - name: Install cocogitto (pinned)
+        env:
+          # We install cog explicitly (rather than via cocogitto/cocogitto-action,
+          # which does accept a `version` input) to pin a specific binary/target
+          # deterministically: the action's `version` input doesn't guarantee the
+          # exact pinned binary is what runs (see cakuki/atelier#31). Here we fetch
+          # the prebuilt musl release binary onto PATH at the requested version,
+          # falling back to a pinned `cargo install` if the download is unavailable.
+          COG_VERSION: ${{ inputs.cog-version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          # Extract into a job-scoped temp dir under $RUNNER_TEMP (not shared /tmp)
+          # so the binary path is deterministic and can't collide with anything
+          # else; $RUNNER_TEMP is cleaned up at the end of the job.
+          workdir="$(mktemp -d -p "${RUNNER_TEMP:-/tmp}")"
+          trap 'rm -rf "$workdir"' EXIT
+          # cocogitto publishes its linux x86_64 release as the musl static build
+          # named `cocogitto-<ver>-x86_64-unknown-linux-musl.tar.gz` (NOT `cog-...`).
+          # Asset name verified against the cocogitto 6.5.0 release:
+          #   gh api repos/cocogitto/cocogitto/releases/tags/6.5.0 --jq '.assets[].name'
+          # This URL resolves; cargo install is only the fallback for
+          # versions/targets without a prebuilt asset.
+          url="https://github.com/cocogitto/cocogitto/releases/download/${COG_VERSION}/cocogitto-${COG_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          if curl -sSfL "$url" -o "$workdir/cog.tar.gz"; then
+            tar -xzf "$workdir/cog.tar.gz" -C "$workdir"
+            # The cog binary lives within OUR extraction dir; locate it inside
+            # $workdir only (no scanning all of /tmp). The archive ships it nested
+            # under a target-named dir (e.g. `x86_64-unknown-linux-musl/cog`), so
+            # check the top level first then fall back to a bounded find.
+            cog_bin="$workdir/cog"
+            if [ ! -f "$cog_bin" ]; then
+              cog_bin="$(find "$workdir" -type f -name cog -print -quit)"
+            fi
+            if [ -z "$cog_bin" ] || [ ! -f "$cog_bin" ]; then
+              echo "::error::cog binary not found in extracted archive"; exit 1
+            fi
+            install -m 0755 "$cog_bin" "$HOME/.local/bin/cog"
+          else
+            echo "Prebuilt cog ${COG_VERSION} unavailable; falling back to cargo install."
+            cargo install --locked --version "${COG_VERSION}" cocogitto
+            install -m 0755 "$HOME/.cargo/bin/cog" "$HOME/.local/bin/cog"
+          fi
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Verify cog version
+        env:
+          COG_VERSION: ${{ inputs.cog-version }}
+        run: |
+          set -euo pipefail
+          installed="$(cog --version)"
+          echo "$installed"
+          case "$installed" in
+            *"${COG_VERSION}"*) ;;
+            *) echo "::error::Expected cog ${COG_VERSION}, got: $installed"; exit 1 ;;
+          esac
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Prepare release (changelog + MARKETING_VERSION bump + tag)
+        run: bundle exec fastlane prepare_release
+
+      - name: Push commit + v<semver> tag (triggers beta)
+        env:
+          # github.ref is the FULL ref (e.g. `refs/heads/main`); github.ref_type
+          # is `branch` or `tag`. We read both so we can fail fast unless we're on
+          # a real branch ref, then push to that branch by its explicit
+          # `refs/heads/<branch>` ref.
+          GITHUB_REF: ${{ github.ref }}
+          GITHUB_REF_TYPE: ${{ github.ref_type }}
+        run: |
+          set -euo pipefail
+          # Fail fast unless this run is on a BRANCH ref. The prepare flow commits
+          # to and pushes a branch; if it were triggered on a tag/PR ref instead,
+          # `github.ref_name` would be a tag/PR name and pushing to it would error
+          # or create an unintended remote branch. Guard on both the ref_type and
+          # the `refs/heads/` prefix so we never push to a non-branch ref.
+          if [ "${GITHUB_REF_TYPE}" != "branch" ] || [ "${GITHUB_REF#refs/heads/}" = "${GITHUB_REF}" ]; then
+            echo "::error::apple-release-prepare must run on a branch ref; got ref_type='${GITHUB_REF_TYPE}' ref='${GITHUB_REF}'. Refusing to push." >&2
+            exit 1
+          fi
+          # Push the prepared commit to its EXPLICIT branch ref. Actions checkouts
+          # are typically detached, so `git push origin HEAD` errors or creates a
+          # stray `HEAD` ref; pushing `HEAD:refs/heads/<branch>` (the full ref, not
+          # a bare name) targets the real branch unambiguously. Then push ONLY the
+          # v* tag that points at that HEAD commit (not `--tags`, which would push
+          # every local tag and widen the blast radius). That single tag push fires
+          # the consumer's `on: push: tags: ['v*']` -> `lane: beta`.
+          git push origin "HEAD:${GITHUB_REF}"
+          tag="$(git tag --points-at HEAD --list 'v*' | sort -V | tail -n1)"
+          if [ -n "$tag" ]; then
+            git push origin "refs/tags/$tag"
+          else
+            echo "No v* tag at HEAD; nothing to release."
+          fi
