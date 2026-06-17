@@ -43,11 +43,69 @@ jobs:
         run: ruby test/all.rb
 
       - name: Install cocogitto (pinned)
-        uses: cocogitto/cocogitto-action@v3
-        with:
-          version: ${{ env.COG_VERSION }}
-          check: false
-          check-latest-tag-only: false
+        env:
+          # We install cog explicitly rather than via cocogitto/cocogitto-action@v3:
+          # the action accepts a `version` input but does NOT guarantee the exact
+          # pinned binary is what runs, so a `version: ${{ env.COG_VERSION }}` pin
+          # there is illusory — cog could silently drift between runs, defeating the
+          # SDK/Xcode-pinning discipline this platform follows (cakuki/atelier#31).
+          # Instead we install the pinned asset explicitly and verify it. We fetch the
+          # prebuilt musl release binary onto PATH at the requested version. This is
+          # the ONLY install path: the pinned prebuilt musl asset is deterministic, so
+          # a failed download is a hard error (no cargo fallback — a source build would
+          # be unpinned/non-deterministic, defeating the point of this pin).
+          COG_VERSION: ${{ env.COG_VERSION }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          # Download + extract the pinned cog release into a temp dir
+          # (RUNNER_TEMP, or /tmp as a fallback) and add it to PATH for this job.
+          # `mktemp -d` gives a unique, randomly-named dir isolated to this job.
+          workdir="$(mktemp -d -p "${RUNNER_TEMP:-/tmp}")"
+          trap 'rm -rf "$workdir"' EXIT
+          # cocogitto publishes its linux x86_64 release as the musl static build
+          # named `cocogitto-<ver>-x86_64-unknown-linux-musl.tar.gz` (NOT `cog-...`).
+          # Asset name verified against the cocogitto 6.5.0 release:
+          #   gh api repos/cocogitto/cocogitto/releases/tags/6.5.0 --jq '.assets[].name'
+          # The pinned prebuilt asset is the single, deterministic install path: if
+          # the download fails we hard-error rather than falling back to an unpinned
+          # source build, which would defeat the COG_VERSION pin.
+          url="https://github.com/cocogitto/cocogitto/releases/download/${COG_VERSION}/cocogitto-${COG_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          if ! curl -sSfL "$url" -o "$workdir/cog.tar.gz"; then
+            echo "::error::Failed to download pinned cog ${COG_VERSION} prebuilt asset from $url. No cargo fallback by design (would be unpinned); failing loudly."
+            exit 1
+          fi
+          tar -xzf "$workdir/cog.tar.gz" -C "$workdir"
+          # The cog binary lives within OUR extraction dir; locate it inside
+          # $workdir only (no scanning all of /tmp). The archive ships it nested
+          # under a target-named dir (e.g. `x86_64-unknown-linux-musl/cog`), so
+          # check the top level first then fall back to a bounded find.
+          cog_bin="$workdir/cog"
+          if [ ! -f "$cog_bin" ]; then
+            cog_bin="$(find "$workdir" -type f -name cog -print -quit)"
+          fi
+          if [ -z "$cog_bin" ] || [ ! -f "$cog_bin" ]; then
+            echo "::error::cog binary not found in extracted archive"; exit 1
+          fi
+          install -m 0755 "$cog_bin" "$HOME/.local/bin/cog"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Verify cog version
+        env:
+          # Fail the job if the installed cog isn't the pinned version — this is what
+          # makes the COG_VERSION pin real (vs. the action's illusory input above).
+          COG_VERSION: ${{ env.COG_VERSION }}
+        run: |
+          set -euo pipefail
+          installed="$(cog --version)"
+          echo "$installed"
+          # `cog --version` prints `cog <X.Y.Z>` (clap-standard). Parse the version
+          # token and compare it EXACTLY — a substring/glob match (e.g. `*6.5.0*`)
+          # would false-positive on e.g. `cog 16.5.0`, so the pin must be exact.
+          parsed="$(echo "$installed" | awk '{print $2}')"
+          if [ "$parsed" != "${COG_VERSION}" ]; then
+            echo "::error::Expected cog ${COG_VERSION}, got: $installed"; exit 1
+          fi
 
       - name: Resolve PR commit range
         id: range
