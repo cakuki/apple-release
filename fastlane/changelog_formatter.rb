@@ -17,7 +17,19 @@ module ChangelogFormatter
     text = section.dup
     text = text.gsub(/^####\s+(.+)$/, '\1')                              # drop "#### Foo" -> "Foo"
     text = text.gsub(/^-\s+/, "• ")                                      # "- x" -> "• x"
-    text = text.gsub(/\s+-\s+\([0-9a-f]+\)(\s+-\s+[\w\s]+)?$/, "")       # drop " - (hash) - Name"
+    # Drop cog's " - (hash) - <committer>" trailer. The committer half is the
+    # rest of the line after the second " - " (`\S.*`), NOT just `[\w\s]` — real
+    # committers carry hyphens/brackets/dots (`atelier-ci`, `dependabot[bot]`),
+    # which the narrower class silently left behind (cakuki/atelier#26 drift,
+    # caught by the real-cog integration test). The hash group stays strict.
+    #
+    # All inter-token whitespace is HORIZONTAL ONLY (`[ \t]`, not `\s`): `\s`
+    # matches newlines, so on a bullet ending in just " - (hash)" the optional
+    # committer group could consume the trailing newline plus the entire next
+    # bullet line (which starts with "- "), stripping a whole subsequent entry.
+    # `[ \t]` keeps every part of the match on a single line, and `.` (no /m)
+    # already can't cross a newline so the committer tail stays single-line too.
+    text = text.gsub(/[ \t]+-[ \t]+\([0-9a-f]+\)([ \t]+-[ \t]+\S.*)?$/, "")
     text.strip.gsub(/\n{3,}/, "\n\n")                                    # collapse blank runs
   end
 

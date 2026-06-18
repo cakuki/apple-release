@@ -45,8 +45,13 @@ jobs:
         with:
           ruby-version: "3.3"
 
-      - name: Run pure-core test suite
-        # stdlib-only suite, no bundler; Ruby pinned by the step above.
+      - name: Run pure-core test suite (cog absent → integration skips)
+        # stdlib-only suite, no bundler; Ruby pinned by the step above. cog is
+        # NOT installed yet at this point, so the real-cog integration test
+        # (test/changelog_pipeline_integration_test.rb) SKIPs here — this run
+        # doubles as proof the suite stays green on a cog-less box (the system-
+        # ruby-2.6 dev environment). The same suite is re-run AFTER cog is
+        # installed below, where the integration test actually executes.
         run: ruby test/all.rb
 
       - name: Install cocogitto (pinned)
@@ -123,6 +128,15 @@ jobs:
           if [ "$parsed" != "${COG_VERSION}" ]; then
             echo "::error::Expected cog ${COG_VERSION}, got: $installed"; exit 1
           fi
+
+      - name: Run real-cog integration suite (drift guard)
+        # cog is now on PATH at the pinned version, so re-running the suite makes
+        # the real-cog integration test ACTUALLY RUN (it skips when cog is
+        # absent). This is the canonical guard against cog<->ChangelogFormatter
+        # output drift (cakuki/atelier#26): it builds a throwaway repo, runs the
+        # REAL `cog changelog`, and asserts the formatted TestFlight notes +
+        # derived v<semver> tag match. Fails CI if the contract drifts.
+        run: ruby test/all.rb
 
       - name: Resolve PR commit range
         id: range
