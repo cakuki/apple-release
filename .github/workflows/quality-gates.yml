@@ -1,0 +1,194 @@
+name: quality-gates
+
+# Reusable lint/format quality gate (EPIC-05, Task 1). A single `workflow_call`
+# entry point that every consuming app inherits with no per-repo wiring: it runs
+# SwiftLint in strict mode (any violation fails) and SwiftFormat in `--lint`
+# (check-only) mode (any drift fails), against the `.swiftlint.yml` /
+# `.swiftformat` the app commits via the EPIC-01 template.
+#
+# Mirrors the platform's tool-pinning discipline (see commit-lint.yml): the lint
+# tools are pinned by version AND verified by sha256 against the official GitHub
+# Release assets BEFORE they're trusted on PATH — an unpinned/unverified linter
+# could silently change its rule set (or be tampered with) between runs, which
+# would defeat the point of an enforced bar. Versions and digests are exposed as
+# inputs so apps can bump without forking; the defaults are the platform's
+# blessed versions.
+#
+# macOS runner: SwiftLint/SwiftFormat are Swift toolchain tools and the
+# `portable_swiftlint.zip` / `swiftformat.zip` assets we pin are the macOS
+# universal binaries, matching the rest of the Apple-release platform.
+#
+# No signing secrets are needed (lint only), so consumers call this with just
+# `uses:` — `secrets: inherit` is unnecessary.
+
+on:
+  workflow_call:
+    inputs:
+      swift-paths:
+        description: "Space-separated paths to lint/format-check (relative to repo root)"
+        required: false
+        type: string
+        default: "."
+      swiftlint-version:
+        description: "Pinned SwiftLint version (must match swiftlint-sha256)"
+        required: false
+        type: string
+        default: "0.63.3"
+      swiftlint-sha256:
+        description: "sha256 of the pinned SwiftLint portable_swiftlint.zip asset"
+        required: false
+        type: string
+        default: "fb045e85e7cb3374f42a4840b6b85a0106302afa69035c0c6f29af4a44c810b6"
+      swiftformat-version:
+        description: "Pinned SwiftFormat version (must match swiftformat-sha256)"
+        required: false
+        type: string
+        default: "0.61.1"
+      swiftformat-sha256:
+        description: "sha256 of the pinned SwiftFormat swiftformat.zip asset"
+        required: false
+        type: string
+        default: "b990400779aceb7d7020796eb9ba814d4480543f671d38fc0ff48cb72f04c584"
+      strict:
+        description: "Fail on any SwiftLint violation (strict mode). Default true."
+        required: false
+        type: boolean
+        default: true
+      runs-on:
+        description: "Runner label (Swift lint tools need macOS)"
+        required: false
+        type: string
+        default: "macos-15"
+
+permissions:
+  contents: read
+
+jobs:
+  quality-gates:
+    runs-on: ${{ inputs.runs-on }}
+    env:
+      SWIFT_PATHS: ${{ inputs.swift-paths }}
+      SWIFTLINT_VERSION: ${{ inputs.swiftlint-version }}
+      SWIFTLINT_SHA256: ${{ inputs.swiftlint-sha256 }}
+      SWIFTFORMAT_VERSION: ${{ inputs.swiftformat-version }}
+      SWIFTFORMAT_SHA256: ${{ inputs.swiftformat-sha256 }}
+      STRICT: ${{ inputs.strict }}
+    steps:
+      - name: Checkout consuming repo
+        uses: actions/checkout@v4
+
+      - name: Install SwiftLint (pinned + verified)
+        env:
+          SWIFTLINT_VERSION: ${{ env.SWIFTLINT_VERSION }}
+          SWIFTLINT_SHA256: ${{ env.SWIFTLINT_SHA256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          # Download + verify the pinned portable SwiftLint into a unique temp dir
+          # isolated to this job, then install onto PATH. The portable asset is a
+          # single self-contained macOS binary (`swiftlint`), so no toolchain build.
+          # Use the portable `XXXXXX` template form: BSD mktemp (macOS runners) has
+          # no `-p` flag, but the template parent works on both BSD and GNU.
+          workdir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/swiftlint.XXXXXX")"
+          trap 'rm -rf "$workdir"' EXIT
+          url="https://github.com/realm/SwiftLint/releases/download/${SWIFTLINT_VERSION}/portable_swiftlint.zip"
+          if ! curl -sSfL "$url" -o "$workdir/swiftlint.zip"; then
+            echo "::error::Failed to download pinned SwiftLint ${SWIFTLINT_VERSION} from $url"
+            exit 1
+          fi
+          # Authenticate the bytes against the pinned digest BEFORE unzipping — a
+          # version pin alone says nothing about whether the bytes were tampered.
+          actual="$(shasum -a 256 "$workdir/swiftlint.zip" | awk '{print $1}')"
+          if [ "$actual" != "${SWIFTLINT_SHA256}" ]; then
+            echo "::error::SwiftLint zip sha256 mismatch (expected ${SWIFTLINT_SHA256}, got ${actual}) — refusing to install"
+            exit 1
+          fi
+          unzip -q -o "$workdir/swiftlint.zip" -d "$workdir/extracted"
+          bin="$workdir/extracted/swiftlint"
+          [ -f "$bin" ] || bin="$(find "$workdir/extracted" -type f -name swiftlint -print -quit)"
+          if [ -z "$bin" ] || [ ! -f "$bin" ]; then
+            echo "::error::swiftlint binary not found in extracted archive"; exit 1
+          fi
+          install -m 0755 "$bin" "$HOME/.local/bin/swiftlint"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install SwiftFormat (pinned + verified)
+        env:
+          SWIFTFORMAT_VERSION: ${{ env.SWIFTFORMAT_VERSION }}
+          SWIFTFORMAT_SHA256: ${{ env.SWIFTFORMAT_SHA256 }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          # Portable temp dir: BSD mktemp on macOS runners lacks `-p`; the `XXXXXX`
+          # template form is honored by both BSD and GNU mktemp.
+          workdir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/swiftformat.XXXXXX")"
+          trap 'rm -rf "$workdir"' EXIT
+          # The macOS `swiftformat.zip` asset unpacks to a single `swiftformat` binary.
+          url="https://github.com/nicklockwood/SwiftFormat/releases/download/${SWIFTFORMAT_VERSION}/swiftformat.zip"
+          if ! curl -sSfL "$url" -o "$workdir/swiftformat.zip"; then
+            echo "::error::Failed to download pinned SwiftFormat ${SWIFTFORMAT_VERSION} from $url"
+            exit 1
+          fi
+          actual="$(shasum -a 256 "$workdir/swiftformat.zip" | awk '{print $1}')"
+          if [ "$actual" != "${SWIFTFORMAT_SHA256}" ]; then
+            echo "::error::SwiftFormat zip sha256 mismatch (expected ${SWIFTFORMAT_SHA256}, got ${actual}) — refusing to install"
+            exit 1
+          fi
+          unzip -q -o "$workdir/swiftformat.zip" -d "$workdir/extracted"
+          bin="$workdir/extracted/swiftformat"
+          [ -f "$bin" ] || bin="$(find "$workdir/extracted" -type f -name swiftformat -print -quit)"
+          if [ -z "$bin" ] || [ ! -f "$bin" ]; then
+            echo "::error::swiftformat binary not found in extracted archive"; exit 1
+          fi
+          install -m 0755 "$bin" "$HOME/.local/bin/swiftformat"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Verify pinned tool versions
+        env:
+          SWIFTLINT_VERSION: ${{ env.SWIFTLINT_VERSION }}
+          SWIFTFORMAT_VERSION: ${{ env.SWIFTFORMAT_VERSION }}
+        run: |
+          set -euo pipefail
+          # Confirm the installed binaries report the pinned versions EXACTLY —
+          # this is what makes the version pins real (vs. illusory). Exact compare,
+          # not a substring/glob, so e.g. 0.63.3 never false-positives on 10.63.3.
+          sl="$(swiftlint version)"
+          echo "swiftlint $sl"
+          if [ "$sl" != "${SWIFTLINT_VERSION}" ]; then
+            echo "::error::Expected SwiftLint ${SWIFTLINT_VERSION}, got: $sl"; exit 1
+          fi
+          # `swiftformat --version` prints just the version number.
+          sf="$(swiftformat --version)"
+          echo "swiftformat $sf"
+          if [ "$sf" != "${SWIFTFORMAT_VERSION}" ]; then
+            echo "::error::Expected SwiftFormat ${SWIFTFORMAT_VERSION}, got: $sf"; exit 1
+          fi
+
+      - name: SwiftLint (strict)
+        env:
+          SWIFT_PATHS: ${{ env.SWIFT_PATHS }}
+          STRICT: ${{ env.STRICT }}
+        run: |
+          set -euo pipefail
+          # Uses the app's committed `.swiftlint.yml` (shipped by the EPIC-01
+          # template); SwiftLint auto-discovers it from the repo root. In strict
+          # mode every warning is escalated to an error, so ANY violation fails
+          # the job — that's the enforced bar. `strict: false` keeps warnings
+          # non-fatal (serious-violations-only) for apps mid-migration.
+          strict_flag=""
+          if [ "${STRICT}" = "true" ]; then
+            strict_flag="--strict"
+          fi
+          # shellcheck disable=SC2086 # SWIFT_PATHS is intentionally word-split into multiple path args
+          swiftlint lint $strict_flag -- $SWIFT_PATHS
+
+      - name: SwiftFormat (--lint, check only)
+        env:
+          SWIFT_PATHS: ${{ env.SWIFT_PATHS }}
+        run: |
+          set -euo pipefail
+          # `--lint` is check-only: SwiftFormat writes nothing and exits non-zero
+          # if ANY file would change, failing the job on formatting drift. It reads
+          # the app's committed `.swiftformat` config automatically.
+          # shellcheck disable=SC2086 # SWIFT_PATHS is intentionally word-split into multiple path args
+          swiftformat --lint $SWIFT_PATHS
