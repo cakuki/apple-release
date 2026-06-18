@@ -13,6 +13,36 @@ workflow, and the signing-bootstrap script, so build/sign/release logic lives in
 
 Lanes are app-agnostic; per-app config arrives as environment variables set by the workflow.
 
+## Testing
+
+The shared Ruby core (changelog formatter, version bumper, release planner) is covered by a
+fast pure-**stdlib-minitest** suite — no bundler, runs on the system Ruby 2.6. Run the whole
+suite with one command:
+
+```sh
+ruby test/all.rb
+```
+
+New `test/*_test.rb` files are auto-discovered, so the suite needs no edits to grow.
+
+### Real-cog integration test (drift guard)
+
+`test/changelog_pipeline_integration_test.rb` is the canonical guard against **tool-output
+drift**: every other test asserts against a *hand-written* idea of cog's output (proving only
+"code matches the test"), so a `ChangelogFormatter` regex once shipped that never matched cog's
+real `default`-template output. This test closes that gap by running the **real `cog` binary**
+end-to-end — it builds a throwaway git repo with conventional commits + a tag, runs the actual
+`cog changelog <range>`, pipes the output through `ChangelogFormatter` + `ReleasePlan`, and
+asserts both the TestFlight notes and the derived `v<semver>` tag. It **fails** if the
+cog↔formatter contract drifts.
+
+- **Locally:** it runs automatically via `ruby test/all.rb` **when `cog` is on `PATH`**, and
+  **SKIPs cleanly** (never fails) when cog is absent — so the fast suite still passes on a
+  cog-less box.
+- **In CI:** the `commit-lint` workflow installs the pinned **cog 6.5.0** binary (sha256-verified)
+  and re-runs `ruby test/all.rb` afterwards, so the integration test actually executes there. If
+  you bump the pinned cog version, update `COG_VERSION` + `COG_SHA256` in `.github/workflows/commit-lint.yml`.
+
 ## Release flow (tag-driven)
 
 Cutting a release is split into a cheap **prep** half and the macOS **build** half so a

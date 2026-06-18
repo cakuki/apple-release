@@ -30,6 +30,33 @@ class ChangelogFormatterTest < Minitest::Test
                  ChangelogFormatter.clean("- fix crash - (abc1234)")
   end
 
+  # Drift regression (cakuki/atelier#26): the committer name can contain chars
+  # beyond `[\w\s]` — CI bots and real authors carry hyphens/brackets/dots/
+  # apostrophes (e.g. `atelier-ci`, `dependabot[bot]`). The trailer strip must
+  # drop the WHOLE " - (hash) - <name>" tail regardless. Found by running the
+  # REAL cog binary (committer `atelier-ci`) in the integration test.
+  def test_drops_committer_trailer_with_hyphens_and_brackets
+    assert_equal "• ship it",
+                 ChangelogFormatter.clean("- ship it - (a1b2c3d) - atelier-ci")
+    assert_equal "• bump dep",
+                 ChangelogFormatter.clean("- bump dep - (deadbee) - dependabot[bot]")
+    assert_equal "• grand work",
+                 ChangelogFormatter.clean("- grand work - (c0ffee0) - O'Brien-Smith")
+  end
+
+  # Over-match regression (Copilot review, PR #6): the trailer-strip regex must
+  # use HORIZONTAL whitespace only. The leading `\s+` before " - (hash)" matched
+  # newlines, so on a line that is just a " - (hash)" fragment the strip reached
+  # BACK across the preceding newline, swallowing the line break and merging the
+  # fragment's line into the entry above it. Here the over-strip is observable
+  # internally (a surviving bullet follows): the old `\s` regex collapses the
+  # structure to a single "\n", losing the line boundary, while the horizontal-
+  # only regex leaves each line intact. FAILS with the old `\s` pattern.
+  def test_trailer_strip_does_not_eat_preceding_newline
+    assert_equal "• alpha keeps text\n\n• beta survives",
+                 ChangelogFormatter.clean("- alpha keeps text\n - (abc1234)\n- beta survives")
+  end
+
   def test_collapses_three_or_more_newlines
     assert_equal "• a\n\n• b",
                  ChangelogFormatter.clean("• a\n\n\n\n• b")
