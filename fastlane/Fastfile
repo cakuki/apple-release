@@ -1,6 +1,7 @@
 default_platform(:ios)
 
 require_relative "changelog_formatter"
+require_relative "coverage_gate"
 require_relative "release_plan"
 require_relative "version_bumper"
 
@@ -18,10 +19,19 @@ def asc_api_key
 end
 
 platform :ios do
-  desc "Run unit tests on a simulator"
+  desc "Run unit tests on a simulator, then gate on line coverage (MIN_COVERAGE %)"
   lane :test do
+    # Collect coverage into a known result bundle so we can read xccov afterwards.
+    # `result_bundle: true` + an explicit `output_directory` emit a `.xcresult`
+    # under that directory, making it locatable regardless of scan's default
+    # derived-data layout.
+    result_dir = ENV["TEST_OUTPUT_DIR"] || "./build"
     run_tests(project: ENV.fetch("XCODEPROJ"), scheme: ENV.fetch("SCHEME"),
-              device: ENV["TEST_DEVICE"] || "iPhone 16")
+              device: ENV["TEST_DEVICE"] || "iPhone 16",
+              code_coverage: true, result_bundle: true,
+              output_directory: result_dir)
+
+    enforce_coverage_gate(result_dir)
   end
 
   desc "Sync signing assets (read-only on CI)"
@@ -183,4 +193,83 @@ end
 # Logic lives in changelog_formatter.rb so it's unit-tested without fastlane.
 def changelog_from_md
   ChangelogFormatter.from_file("../CHANGELOG.md")
+end
+
+# Code-coverage threshold gate for the `test` lane (EPIC-05 s2, cakuki/atelier#60).
+#
+# Reads MIN_COVERAGE as a PERCENTAGE (0-100). Default 0 => NON-ENFORCING: the
+# gate computes and prints coverage but never fails the lane, so existing
+# consuming-app CI keeps passing. Only a positive MIN_COVERAGE enforces, failing
+# the lane (via UI.user_error!) when actual coverage < required, printing both
+# the actual % and the required %. Pure parsing/compare logic lives in
+# coverage_gate.rb so it's unit-tested without fastlane.
+def enforce_coverage_gate(result_dir)
+  # Parse MIN_COVERAGE strictly: unset defaults to "0" (non-enforcing), but a
+  # malformed value (e.g. "abc") must fail fast rather than silently becoming
+  # 0.0 via #to_f and disabling the gate, which would hide misconfiguration.
+  raw = ENV.fetch("MIN_COVERAGE", "0")
+  min =
+    begin
+      Float(raw)
+    rescue ArgumentError, TypeError
+      UI.user_error!("MIN_COVERAGE must be a number (0-100); got: #{raw.inspect}")
+    end
+
+  # Strict-parse rejects "abc" but not range/finiteness: a bare -1/200/NaN/Inf
+  # would silently disable (NaN/negative via #positive?), always-fail (200), or
+  # confuse (Infinity). Fail fast with a clear message. (Belt-and-suspenders with
+  # CoverageGate.check, which also self-validates for direct callers.)
+  unless min.finite? && min >= 0 && min <= 100
+    UI.user_error!("MIN_COVERAGE must be a number in 0-100; got: #{raw.inspect}")
+  end
+
+  enforcing = min.positive?
+
+  # scan writes the result bundle under output_directory; glob for the .xcresult
+  # (recursive fallback) rather than hard-coding scan's exact bundle filename.
+  # Pick the MOST RECENTLY MODIFIED bundle: if a prior run left an older
+  # .xcresult behind, a lexicographic `.first` could measure the stale one.
+  xcresult = (Dir["#{result_dir}/*.xcresult"] + Dir["#{result_dir}/**/*.xcresult"])
+             .uniq.max_by { |f| File.mtime(f) }
+  unless xcresult
+    # No bundle means no coverage data. Don't silently let a positive gate pass —
+    # and make the log reflect whether we're failing (enforcing) or skipping.
+    if enforcing
+      UI.user_error!("Coverage gate: no .xcresult found under #{result_dir}; cannot verify MIN_COVERAGE — failing.")
+    else
+      UI.important("Coverage gate: no .xcresult found under #{result_dir}; skipping (MIN_COVERAGE=0, non-enforcing).")
+    end
+    return
+  end
+
+  # Shell out to xccov for the JSON report (portable: no BSD-only shell flags).
+  # A report we can't read/parse can't prove the bar is met — so fail only when
+  # ENFORCING. In non-enforcing mode (MIN_COVERAGE=0) this is informational and
+  # must NEVER fail the lane. Rescue StandardError (not just CoverageGate::Error):
+  # `sh` itself can raise a fastlane/shell error (missing Xcode tools, corrupted
+  # .xcresult), and non-enforcing mode must swallow those too. Include the
+  # exception CLASS in the message so the underlying cause is debuggable.
+  begin
+    json   = sh(["xcrun", "xccov", "view", "--report", "--json", xcresult], log: false)
+    result = CoverageGate.check(json, min)
+  rescue StandardError => e
+    msg = "Coverage gate: could not evaluate coverage (#{e.class}: #{e.message})."
+    enforcing ? UI.user_error!(msg) : UI.important(msg)
+    return
+  end
+
+  # 4 decimals so a near-miss (e.g. 79.9950% vs 80.0000%) doesn't display as a
+  # confusing "80.00% < 80.00%" — the comparison itself is on the exact Floats.
+  actual_str = format("%.4f%%", result.actual_percent)
+  unless enforcing
+    UI.message("Coverage: #{actual_str} (MIN_COVERAGE=0, gate non-enforcing).")
+    return
+  end
+
+  required_str = format("%.4f%%", result.required_percent)
+  if result.passed
+    UI.success("Coverage gate passed: #{actual_str} >= required #{required_str}.")
+  else
+    UI.user_error!("Coverage gate FAILED: actual #{actual_str} < required #{required_str}.")
+  end
 end
