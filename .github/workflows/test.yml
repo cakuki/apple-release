@@ -1,0 +1,42 @@
+# Dedicated unit-suite gate. Runs the pure-core stdlib-minitest suite
+# (`ruby test/all.rb` — changelog_formatter, version_bumper, release_plan,
+# commit_range, coverage_gate) on every PR and on main/v1 pushes, exposed as a
+# clearly-named `test` status check.
+#
+# The other workflows in this repo are `workflow_call`-only (they run only when
+# a consuming app invokes them), so the suite could break and a PR still show
+# green. This standalone `on: pull_request` workflow closes that gap.
+name: test
+
+on:
+  pull_request:
+  push:
+    branches: [main, v1]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Ruby (pinned)
+        # Pin Ruby so this gate stays stable as `ubuntu-latest` rolls. 3.3 still
+        # ships minitest as a default gem (removed in 3.4), which the no-bundler
+        # stdlib suite relies on. No `bundler-cache` — there's no Gemfile for the
+        # suite.
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.3"
+
+      - name: Ensure minitest is available (defensive)
+        # The suite resolves `minitest/autorun`. Install it explicitly so the run
+        # never fails on a missing minitest even if the pinned Ruby above changes
+        # to one that no longer bundles it as a default gem.
+        run: gem install minitest --no-document
+
+      - name: Run pure-core test suite
+        run: ruby test/all.rb
