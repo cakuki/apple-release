@@ -31,7 +31,7 @@ jobs:
       COG_SHA256: "9de1086c8b6521a8a01abbd62c562d6d355990f542e3082b49ec4a597f925646"
     steps:
       - name: Checkout (full history)
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           # `cog check` resolves base..HEAD; the default shallow clone breaks
           # range resolution on PRs, so fetch the full history.
@@ -41,7 +41,7 @@ jobs:
         # Don't depend on whatever Ruby the runner image ships — pin it so this
         # gate stays stable as `ubuntu-latest` rolls. 3.3 matches the CI default
         # used elsewhere in the platform.
-        uses: ruby/setup-ruby@v1
+        uses: ruby/setup-ruby@9eb537ca036ebaed86729dcb9309076e4c5c3b74 # v1
         with:
           ruby-version: "3.3"
 
