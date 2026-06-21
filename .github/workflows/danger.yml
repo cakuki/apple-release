@@ -1,0 +1,141 @@
+name: danger
+
+# Reusable Danger PR-checks job (EPIC-05 slice 3, cakuki/atelier#5). A single
+# `workflow_call` entry point that consuming apps inherit with ONE `uses:` line
+# and NO owner secret: Danger comments on the PR via the auto-provided
+# `GITHUB_TOKEN` (passed through as DANGER_GITHUB_API_TOKEN), so there is nothing
+# to provision per repo. It runs the shared `fastlane/Dangerfile`, which emits
+# LIGHTWEIGHT, NON-BLOCKING nudges (large PR, missing tests, empty description).
+#
+# This is a SEPARATE workflow from quality-gates.yml on purpose: Danger is pure
+# Ruby (ubuntu-latest, no Xcode/macOS) and only NUDGES (`warn`), whereas
+# quality-gates is the hard, macOS-bound SwiftLint/SwiftFormat bar. Keeping them
+# split lets an app adopt the enforced lint/coverage gates without also opting
+# into PR comments (or vice-versa), and keeps the macOS runner minutes off the
+# nudge path. Both are still one `uses:` line each in the consuming workflow.
+#
+# REUSABLE-WORKFLOW EXECUTION MODEL (why this job does TWO checkouts):
+# A `workflow_call` workflow runs in the CALLER's context. The default
+# `actions/checkout` therefore clones the CONSUMING app's repo — which is exactly
+# what Danger needs for the PR diff/git context, but it does NOT contain this
+# platform's `Gemfile` (with the `danger` gem) or `fastlane/Dangerfile`. Running
+# `bundle exec danger --dangerfile=fastlane/Dangerfile` against the caller would
+# fail (no danger gem / no such Dangerfile) or silently apply the caller's own
+# rules — breaking the "one `uses:` line adopts the SHARED checks" promise.
+# So we ALSO check out THIS repo (cakuki/apple-release) into `.danger-platform/`
+# and source BOTH the Gemfile (gem) and the Dangerfile (rules) from there, while
+# Danger still analyzes the caller's checked-out diff. Platform rules + platform
+# gem, caller's diff.
+#
+# Adopt it from a consuming app's PR workflow:
+#   jobs:
+#     danger:
+#       uses: cakuki/apple-release/.github/workflows/danger.yml@v1
+#       # The consuming WORKFLOW must grant the called workflow the perms below.
+#       # `issues: write` is the one Danger's comment actually NEEDS: its default
+#       # `github.comment` posts ONE sticky comment via the Issues comment API (a
+#       # PR is an "issue" to that endpoint), so that perm is what makes the
+#       # comment post. `contents: read` lets it read the diff; `pull-requests:
+#       # read` lets Danger read PR metadata (the body) — this job never mutates
+#       # PR state, so write is not needed.
+#       permissions:
+#         contents: read
+#         issues: write
+#         pull-requests: read
+# A called workflow's GITHUB_TOKEN permissions can be NARROWED but never
+# WIDENED by the `permissions:` block below — they're capped by what the
+# caller's token already allows. If a consuming repo defaults its workflow
+# token to read-only (a common org/repo setting), the `issues: write`
+# declared here has no effect and Danger cannot post its comment unless the
+# caller sets the permissions shown above (or the repo's default token is
+# read/write). No `secrets: inherit` needed — GITHUB_TOKEN is auto-provided to
+# the called workflow. Canonical platform-usage docs live in cakuki/atelier.
+
+on:
+  workflow_call:
+    inputs:
+      ruby-version:
+        description: "Ruby version for the Danger run (Danger is pure Ruby)"
+        required: false
+        type: string
+        default: "3.3"
+      platform-ref:
+        # The ref of THIS repo (cakuki/apple-release) to source the platform
+        # Gemfile + Dangerfile from. Defaults to "v1", the same stable ref
+        # consumers pin in their `uses:` line, so the rules/gem a PR is checked
+        # against match the version the app adopted. We deliberately do NOT
+        # derive this from `github.job_workflow_sha`: that value (the called
+        # reusable workflow's own SHA) is not cleanly/portably exposed as a
+        # `${{ }}` expression — GitHub's own context docs are inconsistent about
+        # it — so a pinned, overridable input is the robust, deterministic
+        # choice. `github.ref`/`github.workflow_ref` would be WRONG here: in a
+        # workflow_call run those resolve to the CALLER's ref, not ours.
+        description: "Ref of cakuki/apple-release to load the platform Dangerfile + Gemfile from"
+        required: false
+        type: string
+        default: "v1"
+
+# Danger needs to read the diff/PR and POST its sticky comment; nothing else.
+# `issues: write` is the perm that lets the comment post — Danger's default
+# `github.comment` uses the Issues comment API (a PR is an "issue" to it).
+# `pull-requests: read` is enough to read PR metadata (e.g. the body); this job
+# never MUTATES PR state, so it doesn't need `pull-requests: write` (least
+# privilege). NOTE: this block only NARROWS the caller's GITHUB_TOKEN — see the
+# header caveat (the consuming workflow must grant `issues: write` for the
+# comment to post if its default token is read-only).
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  danger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout caller repo (the PR under review)
+        # workflow_call runs in the CALLER's context, so this default checkout
+        # clones the CONSUMING app's repo — the source of the PR diff Danger
+        # analyzes. fetch-depth: 0 because Danger diffs base..HEAD and a shallow
+        # clone hides commits and breaks its diff resolution.
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout platform (Dangerfile + Gemfile from cakuki/apple-release)
+        # The SHARED rules + the `danger` gem come from THIS repo, independent of
+        # the caller. Pinned to `inputs.platform-ref` (default "v1") so adoption
+        # is deterministic regardless of what the consuming app vendors.
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: cakuki/apple-release
+          ref: ${{ inputs.platform-ref }}
+          path: .danger-platform
+
+      - name: Set up Ruby (pinned) + bundle install (PLATFORM Gemfile)
+        # Install Danger from the PLATFORM Gemfile/Gemfile.lock (.danger-platform/),
+        # NOT the caller's. BUNDLE_GEMFILE points bundler at the platform lock so
+        # the gem set is the platform's; setup-ruby caches it keyed on that lock.
+        uses: ruby/setup-ruby@9eb537ca036ebaed86729dcb9309076e4c5c3b74 # v1
+        env:
+          BUNDLE_GEMFILE: ${{ github.workspace }}/.danger-platform/Gemfile
+        with:
+          ruby-version: ${{ inputs.ruby-version }}
+          bundler-cache: true
+
+      - name: Run Danger
+        env:
+          # Danger authenticates and comments via the auto-provided workflow
+          # token. `github.token` is the idiomatic source for it in reusable
+          # workflows — it does NOT imply the caller passes/inherits a secret.
+          DANGER_GITHUB_API_TOKEN: ${{ github.token }}
+          # Resolve the danger gem from the PLATFORM bundle.
+          BUNDLE_GEMFILE: ${{ github.workspace }}/.danger-platform/Gemfile
+        # Run the PLATFORM Dangerfile (shared rules) against the CALLER's diff
+        # (the default checkout = current working dir). `--dangerfile` points at
+        # the platform copy; `--fail-on-errors=false` keeps Danger NUDGING (the
+        # Dangerfile only `warn`s) even if a rule ever raises — the hard bars are
+        # SwiftLint/coverage, not this.
+        run: |
+          bundle exec danger \
+            --dangerfile=.danger-platform/fastlane/Dangerfile \
+            --fail-on-errors=false
