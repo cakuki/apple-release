@@ -1,8 +1,10 @@
 default_platform(:ios)
 
+require "fileutils" # FileUtils.mkdir_p in the deliver lane (don't rely on transitive requires)
 require_relative "changelog_formatter"
 require_relative "coverage_gate"
 require_relative "deliver_options"
+require_relative "deliver_release_notes"
 require_relative "release_plan"
 require_relative "version_bumper"
 
@@ -155,7 +157,27 @@ platform :ios do
     # api_key is the only piece built here, from the live asc_api_key helper, and
     # merged in — keeping every other option fastlane-free and testable.
     setup_ci # non-interactive CI keychain/config, consistent with sync_signing/beta
-    upload_to_app_store(**DeliverOptions.build(ENV).merge(api_key: asc_api_key))
+    opts = DeliverOptions.build(ENV)
+
+    # OPT-IN (slice 2): source the default locale's release notes from the
+    # generated CHANGELOG.md instead of its hand-written release_notes.txt. OFF by
+    # default (RELEASE_NOTES_FROM_CHANGELOG unset/!="true") so hand-written store
+    # copy is NEVER silently clobbered. The pure DeliverReleaseNotes (unit-tested,
+    # fastlane-free) decides enabled?/locale/notes/target_path; the lane owns just
+    # this single write, of the same `../CHANGELOG.md` notes that `beta` ships.
+    if DeliverReleaseNotes.enabled?(ENV)
+      locale = DeliverReleaseNotes.default_locale(ENV)
+      notes  = DeliverReleaseNotes.from_file("../CHANGELOG.md")
+      target = DeliverReleaseNotes.target_path(opts[:metadata_path], locale)
+      FileUtils.mkdir_p(File.dirname(target))
+      File.write(target, "#{notes}\n")
+      # Note: notes may be the "Automated build" fallback if CHANGELOG.md is
+      # missing/empty — so phrase this as the write that happened, not a guarantee
+      # the text came from the changelog.
+      UI.message("Wrote #{locale} release notes (from CHANGELOG.md or fallback) -> #{target}")
+    end
+
+    upload_to_app_store(**opts.merge(api_key: asc_api_key))
   end
 
   desc "Build + upload to TestFlight"
