@@ -60,7 +60,7 @@ jobs:
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
       ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Select Xcode
         run: |
@@ -72,7 +72,7 @@ jobs:
           xcodebuild -version
 
       - name: Set up SSH agent for match
-        uses: webfactory/ssh-agent@v0.9.0
+        uses: webfactory/ssh-agent@dc588b651fe13675774614f8e6a936a468676387 # v0.9.0
         with:
           ssh-private-key: ${{ secrets.MATCH_GIT_PRIVATE_KEY }}
 
@@ -80,13 +80,13 @@ jobs:
         run: ssh-keyscan github.com >> ~/.ssh/known_hosts
 
       - name: Set up Ruby
-        uses: ruby/setup-ruby@v1
+        uses: ruby/setup-ruby@9eb537ca036ebaed86729dcb9309076e4c5c3b74 # v1
         with:
           ruby-version: ${{ inputs.ruby-version }}
           bundler-cache: true
 
       - name: Cache DerivedData
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/Library/Developer/Xcode/DerivedData
           key: deriveddata-${{ runner.os }}-${{ hashFiles('**/*.xcodeproj/**', '**/Package.resolved') }}

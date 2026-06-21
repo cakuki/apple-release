@@ -51,7 +51,7 @@ jobs:
       PROJECT_YML: ${{ inputs.project-yml }}
     steps:
       - name: Checkout (full history + tags)
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           # The release range is <lastTag>..HEAD; a shallow clone hides prior
           # tags and history, so fetch everything.
@@ -66,7 +66,7 @@ jobs:
           token: ${{ secrets.release-push-token || github.token }}
 
       - name: Set up Ruby (pinned)
-        uses: ruby/setup-ruby@v1
+        uses: ruby/setup-ruby@9eb537ca036ebaed86729dcb9309076e4c5c3b74 # v1
         with:
           ruby-version: ${{ inputs.ruby-version }}
           bundler-cache: true
