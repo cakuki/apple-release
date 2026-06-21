@@ -2,6 +2,7 @@ default_platform(:ios)
 
 require_relative "changelog_formatter"
 require_relative "coverage_gate"
+require_relative "deliver_options"
 require_relative "release_plan"
 require_relative "version_bumper"
 
@@ -143,6 +144,18 @@ platform :ios do
     UI.success("Prepared #{tag} (commit + tag created). In CI the release " \
                "workflow pushes the commit + tag next, which triggers beta; " \
                "running locally, push the tag yourself to trigger beta.")
+  end
+
+  desc "Upload localized App Store metadata from fastlane/metadata/ (metadata-only, verify-only by default)"
+  lane :deliver do
+    # Metadata-only and NON-LIVE by default. DeliverOptions.build is pure +
+    # unit-tested (see test/deliver_lane_test.rb): it sets verify_only unless the
+    # caller opts in with DELIVER_SUBMIT=true, so CI validates the listing against
+    # ASC but never mutates the store implicitly (AC2 / owner-gated slice 4). The
+    # api_key is the only piece built here, from the live asc_api_key helper, and
+    # merged in — keeping every other option fastlane-free and testable.
+    setup_ci # non-interactive CI keychain/config, consistent with sync_signing/beta
+    upload_to_app_store(**DeliverOptions.build(ENV).merge(api_key: asc_api_key))
   end
 
   desc "Build + upload to TestFlight"

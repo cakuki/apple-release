@@ -20,6 +20,11 @@ on:
         required: false
         type: string
         default: "beta"
+      deliver-submit:
+        description: "Opt into a LIVE App Store metadata upload (deliver lane). Default false = validate only, never mutate ASC."
+        required: false
+        type: string
+        default: "false"
       xcode-version:
         description: "Xcode version to select (Apple requires the latest SDK for uploads)"
         required: false
@@ -55,6 +60,7 @@ jobs:
       SCHEME: ${{ inputs.scheme }}
       XCODEPROJ: ${{ inputs.xcodeproj }}
       TEST_DEVICE: ${{ inputs.test-device }}
+      DELIVER_SUBMIT: ${{ inputs.deliver-submit }}
       MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
