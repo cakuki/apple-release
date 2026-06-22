@@ -1,0 +1,259 @@
+name: supply-chain
+
+# Reusable SBOM + license-allowlist job (EPIC-13 slice, cakuki/atelier#109). A
+# single `workflow_call` entry point that consuming apps inherit with ONE `uses:`
+# line and NO owner secret. It generates a Software Bill of Materials (SBOM) for
+# the app repo and checks the dependency licenses against an allowlist.
+#
+# IT MUST NEVER FAIL OR BLOCK A RELEASE. Two layers guarantee that:
+#
+#   1. SIBLING-JOB ISOLATION (the load-bearing one). In a `workflow_call`, if any
+#      job INSIDE a called workflow fails, the CALLER'S job that called it fails.
+#      The release path is the app's `ios:` job -> apple-release.yml. This
+#      workflow is adopted as a SEPARATE, sibling caller job (`supply-chain:` ->
+#      supply-chain.yml) with NO `needs:` edge to `ios:`. Sibling jobs are
+#      independent nodes in the caller's graph, so a failure here cannot fail the
+#      `ios:` release job. (See cakuki/atelier docs/reference/CI.md.)
+#
+#   2. continue-on-error DEFENSE-IN-DEPTH. The SBOM steps are unconditionally
+#      `continue-on-error: true`; the license check is `continue-on-error` by
+#      default too (non-blocking) but, when `enforce: true`, intentionally fails
+#      this job on a disallowed license — and even then, only THIS job, per
+#      layer (1). So the supply-chain job stays green by default.
+#
+# This is a SEPARATE workflow from apple-release.yml on purpose: it is pure,
+# cheap, Linux-only tooling (ubuntu-latest, no Xcode/macOS minutes), runs in
+# parallel with the macOS release, and its outcome is deliberately decoupled from
+# the release. With a zero-dependency template the SBOM is near-empty until apps
+# vendor real SPM packages — the WIRING is the deliverable; real components and
+# licenses appear automatically once a package lands.
+#
+# Adopt it from a consuming app's release workflow as a SECOND, independent job:
+#   jobs:
+#     ios:
+#       uses: cakuki/apple-release/.github/workflows/apple-release.yml@v1
+#       ...
+#     supply-chain:
+#       uses: cakuki/apple-release/.github/workflows/supply-chain.yml@v1
+# No `needs:` between them — that independence is what keeps a supply-chain
+# failure off the release path.
+
+on:
+  workflow_call:
+    inputs:
+      sbom-format:
+        # syft output format. cyclonedx-json (default) or spdx-json for an SPDX
+        # SBOM; syft-json is the richest for the license parser below but the
+        # license step handles all three.
+        description: "SBOM output format: cyclonedx-json | spdx-json | syft-json"
+        required: false
+        type: string
+        default: "cyclonedx-json"
+      artifact-name:
+        description: "Name of the uploaded SBOM workflow artifact"
+        required: false
+        type: string
+        default: "sbom"
+      license-allowlist:
+        # Comma-separated SPDX license ids considered allowed. Components whose
+        # declared license is NOT in this list (or has no detectable license,
+        # reported as UNKNOWN) are flagged. The default is a permissive set of
+        # OSI/common licenses suitable for app dependencies.
+        description: "Comma-separated allowed SPDX license ids"
+        required: false
+        type: string
+        default: "MIT,Apache-2.0,BSD-2-Clause,BSD-3-Clause,ISC,0BSD,Unlicense,Zlib,MPL-2.0,CC0-1.0"
+      enforce:
+        # REPORT-ONLY by default. When false (default), disallowed/unknown
+        # licenses are surfaced as ::warning:: annotations and the job stays
+        # green. When true, a disallowed license fails THIS job only (never the
+        # release — see header layer (1)).
+        description: "Fail THIS job (never the release) when a disallowed license is found"
+        required: false
+        type: boolean
+        default: false
+      runs-on:
+        # Must be a UNIX-like runner: the license step is a bash script using
+        # sed/grep/tr/here-strings, so Windows runners are NOT supported (even
+        # though syft itself is cross-platform). Linux is cheapest; macOS works.
+        description: "Runner label — must be Unix-like (Linux/macOS, NOT Windows); ubuntu-latest recommended"
+        required: false
+        type: string
+        default: "ubuntu-latest"
+
+# Least privilege: only read the checked-out repo. No write scopes; the SBOM is
+# an artifact, not a release asset, and the license check only annotates.
+permissions:
+  contents: read
+
+jobs:
+  supply-chain:
+    runs-on: ${{ inputs.runs-on }}
+    steps:
+      - name: Checkout caller repo (the app to scan)
+        # workflow_call runs in the CALLER's context, so this default checkout
+        # clones the CONSUMING app's repo — the source syft scans for
+        # Package.resolved / Package.swift (the EPIC-13 committed-Package.resolved
+        # convention).
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Generate SBOM (syft)
+        id: sbom
+        # continue-on-error: never let SBOM tooling break the job (defense in
+        # depth; the job can't break the release regardless — see header).
+        continue-on-error: true
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: "."
+          format: ${{ inputs.sbom-format }}
+          # Deterministic filename the license step + artifact upload both read.
+          output-file: "sbom.${{ inputs.sbom-format }}.json"
+          # The action also auto-uploads an artifact; we upload explicitly below
+          # under the configurable artifact-name for a stable, documented name.
+          upload-artifact: false
+          # This is an artifact-only workflow — never attach the SBOM to (or
+          # mutate) a GitHub Release. The action's default is to attach on a
+          # release context, so disable it explicitly.
+          upload-release-assets: false
+
+      - name: Upload SBOM artifact
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ inputs.artifact-name }}
+          path: "sbom.${{ inputs.sbom-format }}.json"
+          if-no-files-found: warn
+
+      - name: License allowlist check
+        # REPORT-ONLY by default (::warning:: annotations). With enforce=true a
+        # disallowed license fails THIS job only. continue-on-error guards against
+        # parser/tooling errors disabling the job for non-license reasons; the
+        # explicit `exit 1` under enforce is what fails the job intentionally.
+        continue-on-error: ${{ inputs.enforce != true }}
+        env:
+          SBOM_FILE: "sbom.${{ inputs.sbom-format }}.json"
+          ALLOWLIST: ${{ inputs.license-allowlist }}
+          ENFORCE: ${{ inputs.enforce }}
+        shell: bash # the script uses bash-isms (set -o pipefail, here-strings)
+        run: |
+          set -euo pipefail
+
+          # Escape values interpolated into ::workflow commands:: — % -> %25,
+          # CR -> %0D, LF -> %0A — so untrusted SBOM metadata (component name /
+          # license) can't break the command payload or inject extra commands.
+          esc() { local s=$1; s=${s//%/%25}; s=${s//$'\r'/%0D}; s=${s//$'\n'/%0A}; printf '%s' "$s"; }
+
+          if [ ! -f "$SBOM_FILE" ]; then
+            echo "::warning title=Supply chain::SBOM file '$SBOM_FILE' not found; skipping license check (was the SBOM step able to run?)."
+            exit 0
+          fi
+
+          # Normalize the allowlist into a newline list, case-insensitive.
+          allow=$(printf '%s' "$ALLOWLIST" | tr ',' '\n' | tr -d ' ' | tr '[:upper:]' '[:lower:]' | sed '/^$/d')
+
+          if ! command -v jq >/dev/null 2>&1; then
+            echo "::warning title=Supply chain::jq not available on the runner; license check skipped (not a clean result)."
+            { echo "### Supply chain: license check"; echo "⚠️ \`jq\` not available — license check skipped (not a clean result)."; } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Extract "name<TAB>license" rows from whichever SBOM shape we produced.
+          # Covers CycloneDX (.components[].licenses[]), SPDX
+          # (.packages[].licenseConcluded/Declared) and syft-json
+          # (.artifacts[].licenses[]). Missing licenses become "UNKNOWN".
+          rows=$(jq -r '
+            def lic_ids(x):
+              if (x|type) == "array" then
+                [ x[]
+                  # CycloneDX: {license:{id|name}} or {expression}; syft-json:
+                  # {value, spdxExpression}; fall back to a bare string, else drop
+                  # (never stringify an unrecognized object into a fake license id).
+                  | ( .license.id // .license.name // .expression
+                      // .spdxExpression // .value // .licenseId
+                      // (if type == "string" then . else empty end) ) ]
+              else [] end;
+
+            ( .components // .packages // .artifacts // [] ) as $comps
+            | $comps[]
+            | (.name // .["packageName"] // "unknown") as $n
+            | (
+                (lic_ids(.licenses)
+                  + [ (.licenseConcluded // empty), (.licenseDeclared // empty) ])
+                | map(select(. != null and . != "" and . != "NOASSERTION"))
+              ) as $ls
+            | if ($ls | length) == 0 then "\($n)\tUNKNOWN"
+              else ($ls[] | "\($n)\t\(.)") end
+          ' "$SBOM_FILE" 2>"${RUNNER_TEMP:-/tmp}/sbom_jq_err") || rows=__JQ_FAILED__
+
+          if [ "$rows" = "__JQ_FAILED__" ]; then
+            echo "::warning title=Supply chain::Could not parse SBOM '$SBOM_FILE' ($(esc "$(tr -d '\n' < "${RUNNER_TEMP:-/tmp}/sbom_jq_err")")); license check skipped (not a clean result)."
+            {
+              echo "### Supply chain: license check"
+              echo "⚠️ Could not parse the SBOM (jq error) — license check skipped. This is **not** a clean pass."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [ -z "$rows" ]; then
+            echo "No dependency components with licenses found in the SBOM (expected for a zero-dependency app). Nothing to check."
+            {
+              echo "### Supply chain: license check"
+              echo "No dependency components found in the SBOM — nothing to check (expected until the app vendors SPM packages)."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          violations=0
+          {
+            echo "### Supply chain: license check"
+            echo ""
+            echo "| Component | License | Status |"
+            echo "| --- | --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          while IFS=$'\t' read -r name license; do
+            [ -n "$name" ] || continue
+            # Handle SPDX license expressions (e.g. "MIT OR Apache-2.0", parens,
+            # "GPL-2.0 WITH ..."): split into individual license IDs and allow the
+            # component only if EVERY token is allowlisted. Deliberately
+            # conservative for OR-expressions — flags for review rather than
+            # auto-allowing on the most permissive operand; fine for a report-only
+            # check. (SPDX operators are uppercase per spec.)
+            # Split on whitespace/parens, then drop the SPDX operator tokens
+            # themselves — robust to any spacing (a bare AND/OR/WITH can never
+            # leak through and be mistaken for a license id).
+            tokens=$(printf '%s' "$license" | tr '()' '  ' | tr ' ' '\n' \
+              | sed -E '/^$/d; /^(AND|OR|WITH)$/Id')
+            allowed=true; any=false
+            while read -r tok; do
+              [ -n "$tok" ] || continue
+              any=true
+              tok_lc=$(printf '%s' "$tok" | tr '[:upper:]' '[:lower:]')
+              printf '%s\n' "$allow" | grep -qxF "$tok_lc" || allowed=false
+            done <<< "$tokens"
+            # Escape Markdown table-breaking '|' in the cells (SBOM metadata is
+            # external input and could contain it).
+            name_md=$(printf '%s' "$name" | sed 's/|/\\|/g')
+            license_md=$(printf '%s' "$license" | sed 's/|/\\|/g')
+            if [ "$any" = true ] && [ "$allowed" = true ]; then
+              echo "| $name_md | $license_md | allowed |" >> "$GITHUB_STEP_SUMMARY"
+            else
+              violations=$((violations + 1))
+              echo "| $name_md | $license_md | NOT ALLOWED |" >> "$GITHUB_STEP_SUMMARY"
+              echo "::warning title=Disallowed license::Component '$(esc "$name")' declares license '$(esc "$license")', which is not in the allowlist."
+            fi
+          done <<< "$rows"
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$violations" -eq 0 ]; then
+            echo "All dependency licenses are in the allowlist." >> "$GITHUB_STEP_SUMMARY"
+            echo "All dependency licenses are in the allowlist."
+            exit 0
+          fi
+
+          echo "Found $violations disallowed license declaration(s) (a multi-license component can count more than once)." >> "$GITHUB_STEP_SUMMARY"
+          if [ "$ENFORCE" = "true" ]; then
+            echo "::error title=Supply chain::enforce=true and $violations disallowed license(s) found — failing the supply-chain job (the release is unaffected)."
+            exit 1
+          fi
+          echo "::notice title=Supply chain::Report-only mode (enforce=false): $violations disallowed license(s) reported as warnings; job stays green."
