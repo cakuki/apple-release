@@ -135,10 +135,20 @@ module ReviewDigest
     int =
       case value
       when Integer then value
-      when String  then Integer(value, exception: false)
+      when String  then int_or_nil(value)
       end
     int if int && (1..5).cover?(int)
   end
+
+  # Version-agnostic strict integer parse (nil on non-integer). Avoids
+  # Integer(_, exception: false) so the module stays portable across Ruby
+  # versions / a stdlib-only dev box. Internal.
+  def int_or_nil(string)
+    Integer(string)
+  rescue ArgumentError, TypeError
+    nil
+  end
+  private_class_method :int_or_nil
   private_class_method :parse_rating
 
   # Best-effort ISO8601 parse; nil on anything unparseable (so a bad createdDate
