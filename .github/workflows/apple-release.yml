@@ -45,6 +45,16 @@ on:
         required: false
         type: string
         default: ""
+      sentry-org:
+        description: "Sentry (or GlitchTip) org slug for dSYM upload on the beta lane. OFF unless this AND sentry-project AND the SENTRY_AUTH_TOKEN secret are all set."
+        required: false
+        type: string
+        default: ""
+      sentry-project:
+        description: "Sentry (or GlitchTip) project slug for dSYM upload on the beta lane. OFF unless this AND sentry-org AND the SENTRY_AUTH_TOKEN secret are all set."
+        required: false
+        type: string
+        default: ""
       xcode-version:
         description: "Xcode version to select (Apple requires the latest SDK for uploads)"
         required: false
@@ -71,6 +81,9 @@ on:
         required: true
       ASC_KEY_P8_BASE64:
         required: true
+      SENTRY_AUTH_TOKEN:
+        description: "Sentry (or GlitchTip) auth token for dSYM upload on the beta lane. OPTIONAL — absent => dSYM upload no-ops and the build still ships to TestFlight (never failed)."
+        required: false
 
 jobs:
   release:
@@ -85,6 +98,12 @@ jobs:
       DELIVER_PHASED_RELEASE: ${{ inputs.deliver-phased-release }}
       TESTFLIGHT_DISTRIBUTE_EXTERNAL: ${{ inputs.testflight-distribute-external }}
       TESTFLIGHT_GROUPS: ${{ inputs.testflight-groups }}
+      # Sentry dSYM upload (EPIC-06 s2): all optional. The beta lane no-ops unless
+      # the token + org + project are all present and non-blank (SentryDsymOptions),
+      # so an app with no Sentry account ships exactly as before and CI stays green.
+      SENTRY_ORG: ${{ inputs.sentry-org }}
+      SENTRY_PROJECT: ${{ inputs.sentry-project }}
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
       MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}

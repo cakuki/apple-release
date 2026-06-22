@@ -7,6 +7,7 @@ require_relative "deliver_options"
 require_relative "deliver_release_notes"
 require_relative "external_testflight_options"
 require_relative "release_plan"
+require_relative "sentry_dsym_options"
 require_relative "version_bumper"
 
 # match storage repo (Matchfile isn't imported via import_from_git, so set it here).
@@ -216,6 +217,17 @@ platform :ios do
       export_options:   { provisioningProfiles: { app_id => profile } }
     )
 
+    # Symbolicate crash reports (EPIC-06 slice 2): upload the dSYMs gym just
+    # produced to Sentry. OFF by default — SentryDsymOptions.build is pure +
+    # unit-tested (see test/sentry_dsym_options_test.rb) and returns nil unless
+    # ALL of SENTRY_AUTH_TOKEN / SENTRY_ORG / SENTRY_PROJECT are configured
+    # (non-blank, not an unexpanded `$(...)` placeholder). So an app with no
+    # Sentry account no-ops cleanly here and still uploads to TestFlight below;
+    # the lane is NEVER failed just because Sentry isn't set up (mirrors slice
+    # 1's "no DSN => no-op"). The upload itself is I/O (not unit-tested); the
+    # decision/params ARE. The auth token is secret — never echoed.
+    upload_dsyms_to_sentry(SentryDsymOptions.build(ENV))
+
     pilot(
       api_key:                           key,
       app_identifier:                    app_id,
@@ -246,6 +258,74 @@ end
 # Logic lives in changelog_formatter.rb so it's unit-tested without fastlane.
 def changelog_from_md
   ChangelogFormatter.from_file("../CHANGELOG.md")
+end
+
+# Upload the dSYMs gym just produced to Sentry so crash reports are symbolicated
+# (EPIC-06 slice 2, cakuki/atelier#6). The PURE decision (should we upload? with
+# what identity?) lives in sentry_dsym_options.rb and is unit-tested without
+# fastlane; this helper is the thin I/O wrapper around it (so the Fastfile stays
+# thin and the untested surface is just the shell-out).
+#
+# `opts` is what SentryDsymOptions.build(ENV) returned:
+#   nil  => Sentry not configured => CLEAN NO-OP. Return immediately; `beta` still
+#           archives + uploads to TestFlight exactly as today. NEVER fail here.
+#   hash => { auth_token:, org_slug:, project_slug: } => perform the upload.
+#
+# We shell out to `sentry-cli debug-files upload` rather than the sentry fastlane
+# plugin: sentry-cli is a single self-contained binary (no extra gem in the
+# Gemfile, easy to pin/install in CI), and `debug-files upload` is the modern,
+# documented dSYM path. (Reversible TL call — swapping in the plugin later only
+# touches this helper.)
+#
+# dSYM PATH ROBUSTNESS: gym writes dSYMs both into the `.xcarchive`'s `dSYMs/`
+# and (with the default DWARF-with-dSYM setting) alongside the export in
+# `./build`. We point sentry-cli at every dSYM-bearing location we can find and
+# let it recurse — `debug-files upload` ignores paths with no debug files, so
+# globbing broadly is safe. If we can't locate any dSYM dir we still no-op
+# (warn, don't fail): a missing dSYM must not break a green TestFlight upload.
+#
+# SECRET HYGIENE: the auth token is passed via the SENTRY_AUTH_TOKEN ENV that
+# sentry-cli reads natively — it is NEVER placed on the argv and NEVER logged.
+def upload_dsyms_to_sentry(opts)
+  return if opts.nil? # not configured => clean no-op (the common case)
+
+  # Collect candidate dSYM sources from gym's output. GYM_ARCHIVE_PATH /
+  # GYM_DSYM_OUTPUT_PATH are set by the gym action when present; fall back to
+  # globbing the conventional locations so we're robust to the archive location.
+  candidates = [
+    ENV["GYM_DSYM_OUTPUT_PATH"],
+    (File.join(ENV["GYM_ARCHIVE_PATH"], "dSYMs") if ENV["GYM_ARCHIVE_PATH"]),
+    *Dir["./build/**/*.xcarchive/dSYMs"],
+    *Dir["./build/**/*.dSYM"],
+    "./build",
+  ].compact.uniq.select { |p| File.exist?(p) }
+
+  if candidates.empty?
+    UI.important("Sentry dSYM upload: no dSYMs found near gym output; skipping " \
+                 "(symbolication unavailable for this build, but not failing).")
+    return
+  end
+
+  # `--include-sources` embeds source context where available; sentry-cli reads
+  # the token from SENTRY_AUTH_TOKEN in the env (kept off the argv so it can't be
+  # logged). org/project are non-secret slugs and go on the argv.
+  args = [
+    "sentry-cli", "debug-files", "upload",
+    "--org", opts[:org_slug],
+    "--project", opts[:project_slug],
+    "--include-sources",
+    *candidates,
+  ]
+  UI.message("Sentry dSYM upload: org=#{opts[:org_slug]} project=#{opts[:project_slug]} " \
+             "sources=#{candidates.inspect} (auth token via env, not logged)")
+  # Pass the secret token via the child env only; never via argv. CRITICAL:
+  # `log: false` — fastlane's `sh` would otherwise print the command WITH the
+  # leading env hash rendered as `SENTRY_AUTH_TOKEN=<token> ...` (see
+  # sh_helper.rb#shell_command_from_args), leaking the secret. With log:false the
+  # command + its output are suppressed; we already printed a token-free summary
+  # above. The non-zero-exit case still raises (fail the build on a real upload
+  # error), but only AFTER we decided Sentry IS configured.
+  sh({ "SENTRY_AUTH_TOKEN" => opts[:auth_token] }, *args, log: false)
 end
 
 # Code-coverage threshold gate for the `test` lane (EPIC-05 s2, cakuki/atelier#60).

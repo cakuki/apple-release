@@ -9,7 +9,8 @@ workflow, and the signing-bootstrap script, so build/sign/release logic lives in
 - `sync_signing` — install signing assets via `match` (read-only on CI)
 - `prepare_release` — regenerate `CHANGELOG.md` (`cog changelog`), bump `MARKETING_VERSION`
   (semver, via `VersionBumper`), and create a `v<semver>` tag
-- `beta` — build + upload to TestFlight
+- `beta` — build + upload to TestFlight (optionally uploads dSYMs to Sentry — see
+  [Crash-report symbolication](#crash-report-symbolication-dsym-upload-to-sentry))
 
 Lanes are app-agnostic; per-app config arrives as environment variables set by the workflow.
 
@@ -75,5 +76,37 @@ jobs:
     with: { app-identifier: com.example.App, scheme: App, xcodeproj: App.xcodeproj }
     secrets: inherit
 ```
+
+### Crash-report symbolication (dSYM upload to Sentry)
+
+The `beta` lane can upload your build's dSYMs to **Sentry** so crash reports are
+symbolicated. It is **off by default and fully optional** — apps with no Sentry
+account ship to TestFlight exactly as before, and CI stays green.
+
+To enable it, set **all three** of these for the app (any one missing/blank ⇒
+the step is a clean no-op, never a failure):
+
+| Where | Name | What |
+| --- | --- | --- |
+| repo **secret** | `SENTRY_AUTH_TOKEN` | Sentry auth token with dSYM-upload scope (never logged) |
+| workflow input | `sentry-org` | your Sentry org slug |
+| workflow input | `sentry-project` | your Sentry project slug |
+
+```yaml
+# .github/workflows/release.yml
+jobs:
+  ios:
+    uses: cakuki/apple-release/.github/workflows/apple-release.yml@v1
+    with:
+      app-identifier: com.example.App
+      scheme: App
+      xcodeproj: App.xcodeproj
+      sentry-org: your-org        # omit both to keep dSYM upload off
+      sentry-project: your-project
+    secrets: inherit              # SENTRY_AUTH_TOKEN flows in if the repo has it
+```
+
+The reporting backend is Sentry, but a self-hosted **GlitchTip** is a drop-in via
+the same token/org/project — nothing is hardcoded to `sentry.io`.
 
 Architecture, signing, CI reference, and the new-app runbook live in the private `atelier` repo.
