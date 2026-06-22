@@ -163,8 +163,13 @@ jobs:
         id: sentry
         run: |
           set -euo pipefail
-          usable() { # non-empty AND not a $(...)/${...} placeholder
-            case "$1" in
+          usable() { # TRIMMED value is non-empty AND not a $(...)/${...} placeholder
+            local v="$1"
+            v="${v#"${v%%[![:space:]]*}"}"  # strip leading whitespace
+            v="${v%"${v##*[![:space:]]}"}"  # strip trailing whitespace
+            # shellcheck disable=SC2016  # single quotes are intentional: match
+            # the LITERAL $( / ${ of an unexpanded placeholder, not an expansion.
+            case "$v" in
               "" | '$('*')' | '${'*'}') return 1 ;;
               *) return 0 ;;
             esac
@@ -175,14 +180,17 @@ jobs:
             echo "enabled=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Install via Homebrew (preinstalled on GitHub macOS runners) rather than
+      # piping a remote `get-cli` script into a shell: this job has access to
+      # signing material + secrets, so we avoid executing an unauthenticated
+      # remote script. Homebrew fetches a checksummed bottle/formula from the
+      # official getsentry tap. Pin a specific version by editing this line if a
+      # reproducible build is required.
       - name: Install sentry-cli (dSYM upload)
         if: ${{ steps.sentry.outputs.enabled == 'true' }}
         run: |
           set -euo pipefail
-          # -f: fail on HTTP errors so a bad download doesn't silently "succeed"
-          # and leave sentry-cli missing until the lane fails later.
-          curl -fsSL https://sentry.io/get-cli/ | INSTALL_DIR="$HOME/.local/bin" bash
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          brew install getsentry/tools/sentry-cli
 
       - name: Run fastlane
         run: bundle exec fastlane ${{ inputs.lane }}
