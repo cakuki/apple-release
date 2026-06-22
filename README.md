@@ -13,6 +13,9 @@ workflow, and the signing-bootstrap script, so build/sign/release logic lives in
   [Crash-report symbolication](#crash-report-symbolication-dsym-upload-to-sentry))
 - `screenshots` — capture App Store screenshots from UI tests (`snapshot`), optionally
   add device frames (`frameit`). **Local only — never uploads** (see [Screenshots](#screenshots))
+- `reviews` — pull the app's App Store customer reviews from ASC and print a digest
+  (totals, average + per-star breakdown, flagged low ratings). **Read-only** (see
+  [Reviews digest](#reviews-digest))
 
 Lanes are app-agnostic; per-app config arrives as environment variables set by the workflow.
 
@@ -171,5 +174,37 @@ jobs:
 
 The pure decision logic lives in `fastlane/snapshot_options.rb` (`SnapshotOptions.build` /
 `SnapshotOptions.frame?`) and is unit-tested fastlane-free in `test/snapshot_options_test.rb`.
+
+## Reviews digest
+
+The `reviews` lane pulls your app's **App Store customer reviews** from App Store Connect and
+prints a plain-text **digest** so a rating drop surfaces early:
+
+- **Total** reviews, and how many are **new since** a date you pass.
+- **Average rating** (rounded to 2 decimals) and a **per-star breakdown** (5★…1★).
+- **Flagged low ratings** — every review at or below a threshold (default **2★**), listed with
+  its rating, territory, and title so you can act on the complaints.
+
+> **It is READ-ONLY.** The lane only `GET`s App Store Connect — `/v1/apps?filter[bundleId]=…`
+> to resolve the app id, then `/v1/apps/{id}/customerReviews` — using the same App Store Connect
+> API key as `beta`/`deliver`; it **never writes to App Store Connect** and has no effect on your listing.
+
+Tune it via environment variables:
+
+| Env var | Required? | Default | What |
+| --- | --- | --- | --- |
+| `APP_IDENTIFIER` | yes | — | bundle id whose reviews to pull |
+| `REVIEWS_SINCE` | no | — | ISO8601 instant; counts reviews created **strictly after** it as "new" |
+| `REVIEWS_LOW_RATING_THRESHOLD` | no | `2` | flag reviews with `rating` ≤ this value |
+
+Run it locally (with the ASC API key env set, as for `beta`):
+
+```sh
+APP_IDENTIFIER=com.example.App REVIEWS_SINCE=2026-06-01T00:00:00Z bundle exec fastlane reviews
+```
+
+The digest math + text live in `fastlane/review_digest.rb` (`ReviewDigest.build` /
+`ReviewDigest.format`) and are unit-tested fastlane-free in `test/review_digest_test.rb`; the
+thin ASC fetch is the only un-unit-tested part (it's live I/O, the same as the dSYM upload).
 
 Architecture, signing, CI reference, and the new-app runbook live in the private `atelier` repo.
