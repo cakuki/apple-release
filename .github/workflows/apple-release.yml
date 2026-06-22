@@ -55,6 +55,11 @@ on:
         required: false
         type: string
         default: ""
+      sentry-url:
+        description: "Sentry server base URL for dSYM upload (sentry-cli SENTRY_URL). Leave empty for sentry.io (SaaS); set it to your instance (e.g. https://glitchtip.example.com) when using a self-hosted GlitchTip/Sentry."
+        required: false
+        type: string
+        default: ""
       xcode-version:
         description: "Xcode version to select (Apple requires the latest SDK for uploads)"
         required: false
@@ -103,6 +108,9 @@ jobs:
       # so an app with no Sentry account ships exactly as before and CI stays green.
       SENTRY_ORG: ${{ inputs.sentry-org }}
       SENTRY_PROJECT: ${{ inputs.sentry-project }}
+      # sentry-cli reads SENTRY_URL from the env natively; empty => sentry.io.
+      # Set it for a self-hosted GlitchTip/Sentry instance.
+      SENTRY_URL: ${{ inputs.sentry-url }}
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
       MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
@@ -140,16 +148,20 @@ jobs:
           path: ~/Library/Developer/Xcode/DerivedData
           key: deriveddata-${{ runner.os }}-${{ hashFiles('**/*.xcodeproj/**', '**/Package.resolved') }}
 
-      # Install sentry-cli ONLY when a Sentry auth token is configured — the beta
-      # lane shells out to it for dSYM upload (EPIC-06 s2), and GitHub's macOS
-      # runner images don't ship it. Gated on the token so apps with no Sentry
-      # account add zero install time and stay green (mirrors the lane's no-op).
+      # Install sentry-cli ONLY when Sentry is fully configured — the beta lane
+      # shells out to it for dSYM upload (EPIC-06 s2) and GitHub's macOS runner
+      # images don't ship it. Gated on ALL THREE of token/org/project (matching
+      # the lane's no-op condition) so a repo with only a stray secret — or any
+      # app with no Sentry account — adds zero install time and stays green.
       # Installs into a user dir (no sudo) and prepends it to PATH. Pin a specific
       # build by setting SENTRY_CLI_VERSION if a reproducible version is needed.
       - name: Install sentry-cli (dSYM upload)
-        if: ${{ env.SENTRY_AUTH_TOKEN != '' }}
+        if: ${{ env.SENTRY_AUTH_TOKEN != '' && env.SENTRY_ORG != '' && env.SENTRY_PROJECT != '' }}
         run: |
-          curl -sL https://sentry.io/get-cli/ | INSTALL_DIR="$HOME/.local/bin" bash
+          set -euo pipefail
+          # -f: fail on HTTP errors so a bad download doesn't silently "succeed"
+          # and leave sentry-cli missing until the lane fails later.
+          curl -fsSL https://sentry.io/get-cli/ | INSTALL_DIR="$HOME/.local/bin" bash
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Run fastlane

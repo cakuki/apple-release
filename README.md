@@ -91,6 +91,9 @@ the step is a clean no-op, never a failure):
 | repo **secret** | `SENTRY_AUTH_TOKEN` | Sentry auth token with dSYM-upload scope (never logged) |
 | workflow input | `sentry-org` | your Sentry org slug |
 | workflow input | `sentry-project` | your Sentry project slug |
+| workflow input | `sentry-url` | *(optional)* self-hosted instance base URL; omit for sentry.io |
+
+> **What gets uploaded:** the lane runs `sentry-cli debug-files upload --include-sources`, so in addition to the dSYMs it uploads **embedded source context** for your app's code where available — handy for readable stack traces, but be aware your source is sent to the configured Sentry/GlitchTip server.
 
 ```yaml
 # .github/workflows/release.yml
@@ -106,7 +109,11 @@ jobs:
     secrets: inherit              # SENTRY_AUTH_TOKEN flows in if the repo has it
 ```
 
-The reporting backend is Sentry, but a self-hosted **GlitchTip** is a drop-in via
-the same token/org/project — nothing is hardcoded to `sentry.io`.
+The reporting backend is Sentry, but a self-hosted **GlitchTip** is a drop-in:
+nothing is hardcoded to `sentry.io`. Point `sentry-cli` at your instance by
+setting the **`sentry-url`** input (e.g. `https://glitchtip.example.com`) — it
+maps to `SENTRY_URL`, which sentry-cli reads natively — and keep using the same
+`SENTRY_AUTH_TOKEN`/`sentry-org`/`sentry-project`. Leave `sentry-url` empty for
+Sentry's SaaS (sentry.io).
 
 Architecture, signing, CI reference, and the new-app runbook live in the private `atelier` repo.

@@ -289,16 +289,20 @@ end
 def upload_dsyms_to_sentry(opts)
   return if opts.nil? # not configured => clean no-op (the common case)
 
-  # Collect candidate dSYM sources from gym's output. GYM_ARCHIVE_PATH /
-  # GYM_DSYM_OUTPUT_PATH are set by the gym action when present; fall back to
-  # globbing the conventional locations so we're robust to the archive location.
+  # Collect candidate dSYM sources from gym's output. gym publishes its paths via
+  # the lane_context (SharedValues), NOT process ENV — DSYM_OUTPUT_PATH is the
+  # dSYM zip/dir and XCODEBUILD_ARCHIVE is the .xcarchive — so read those, then
+  # fall back to globbing the conventional locations so we're robust to the
+  # archive location.
   # Only ACTUAL dSYM bundles/dirs — never the bare "./build" root: gym always
   # writes there, so including it would keep `candidates` non-empty even with no
   # dSYMs, defeating the warn-and-no-op path below and pointing sentry-cli at the
   # whole build tree. Enumerating the dSYMs directly makes "none found" real.
+  dsym_output = Actions.lane_context[Actions::SharedValues::DSYM_OUTPUT_PATH]
+  archive     = Actions.lane_context[Actions::SharedValues::XCODEBUILD_ARCHIVE]
   candidates = [
-    ENV["GYM_DSYM_OUTPUT_PATH"],
-    (File.join(ENV["GYM_ARCHIVE_PATH"], "dSYMs") if ENV["GYM_ARCHIVE_PATH"]),
+    dsym_output,
+    (File.join(archive, "dSYMs") if archive),
     *Dir["./build/**/*.xcarchive/dSYMs"],
     *Dir["./build/**/*.dSYM"],
   ].compact.uniq.select { |p| File.exist?(p) }
