@@ -153,6 +153,19 @@ class SentryAlertTest < Minitest::Test
     refute_includes text, "Events:"
   end
 
+  def test_falls_back_to_count_when_event_count_is_nil
+    # event_count present-but-nil must NOT shadow a real count — fall back per the
+    # documented "event_count or count" contract.
+    text = SentryAlert.build(payload({}, "event_count" => nil, "count" => 7))
+    assert_includes text, "Events: 7"
+  end
+
+  def test_event_count_wins_over_count_when_both_present
+    text = SentryAlert.build(payload({}, "event_count" => 99, "count" => 7))
+    assert_includes text, "Events: 99"
+    refute_includes text, "Events: 7"
+  end
+
   # --- DEFENSIVE: malformed payloads must never raise ---
 
   def test_empty_hash_payload_does_not_raise

@@ -122,7 +122,11 @@ module SentryAlert
   # new issue shows no count). Accepts an Integer or a numeric String; anything else
   # => nil. Internal helper.
   def count_of(data)
-    raw = data.key?("event_count") ? data["event_count"] : data["count"]
+    # Prefer event_count, but fall back to count when event_count is absent OR
+    # present-but-nil (a nil event_count must not shadow a real count — matches the
+    # documented "event_count or count" contract).
+    raw = data["event_count"]
+    raw = data["count"] if raw.nil?
     case raw
     when Integer then raw
     when String  then int_or_nil(raw)
