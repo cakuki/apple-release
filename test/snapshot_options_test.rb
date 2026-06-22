@@ -39,6 +39,23 @@ class SnapshotOptionsTest < Minitest::Test
     assert_raises(KeyError) { SnapshotOptions.build({}) }
   end
 
+  def test_blank_scheme_raises
+    # A present-but-blank SCHEME is unusable; fail fast with a clear message
+    # rather than passing "   " through to capture_screenshots.
+    assert_raises(ArgumentError) { SnapshotOptions.build("SCHEME" => "   ") }
+  end
+
+  def test_scheme_is_trimmed
+    assert_equal "MyApp-Dev", SnapshotOptions.build("SCHEME" => "  MyApp-Dev \n")[:scheme]
+  end
+
+  def test_default_devices_and_languages_are_deeply_immutable
+    # The returned defaults are a dup, but mutating an element in place must not
+    # corrupt the shared constant for later calls.
+    assert_raises(FrozenError) { SnapshotOptions.build(env)[:devices][0] << "X" }
+    assert_raises(FrozenError) { SnapshotOptions.build(env)[:languages][0] << "X" }
+  end
+
   # --- the static, single-purpose flags ---
 
   def test_static_flags

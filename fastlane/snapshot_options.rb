@@ -32,20 +32,25 @@ module SnapshotOptions
   # A single representative device when SNAPSHOT_DEVICES is unset: a multi-device
   # matrix is slow and opinionated, so default narrow and let callers opt into
   # more. iPhone 16 Pro is a current, ASC-accepted screenshot size.
-  DEFAULT_DEVICES = ["iPhone 16 Pro"].freeze
+  # Element strings are frozen too (not just the array): `devices`/`languages`
+  # return a `.dup` of these defaults, and a caller mutating an element in place
+  # (e.g. `opts[:devices][0] << "x"`) would otherwise corrupt the constant for
+  # every later call.
+  DEFAULT_DEVICES = ["iPhone 16 Pro".freeze].freeze
 
   # Default a single language (US English) when SNAPSHOT_LANGUAGES is unset —
   # ASC's primary/default locale and the minimum a listing needs.
-  DEFAULT_LANGUAGES = ["en-US"].freeze
+  DEFAULT_LANGUAGES = ["en-US".freeze].freeze
 
-  # ENV -> kwargs for `capture_screenshots`. `scheme` uses ENV.fetch so a missing
-  # value fails fast (KeyError), matching beta/deliver — there's nothing to
-  # capture without a scheme. `project` is attached ONLY when XCODEPROJ is set
-  # (otherwise snapshot infers it from cwd). No api_key/app_identifier/upload key
-  # is ever produced — the lane is NON-LIVE.
+  # ENV -> kwargs for `capture_screenshots`. `scheme` is REQUIRED: a MISSING key
+  # fails fast (KeyError, matching beta/deliver — there's nothing to capture
+  # without a scheme) and a present-but-BLANK value also fails fast (ArgumentError)
+  # rather than passing "   " through to capture_screenshots. `project` is attached
+  # ONLY when XCODEPROJ is set (otherwise snapshot infers it from cwd). No
+  # api_key/app_identifier/upload key is ever produced — the lane is NON-LIVE.
   def build(env)
     opts = {
-      scheme:                     env.fetch("SCHEME"),
+      scheme:                     scheme(env),
       devices:                    devices(env),
       languages:                  languages(env),
       output_directory:           output_directory(env),
@@ -71,6 +76,17 @@ module SnapshotOptions
   # implicitly.
   def frame?(env)
     truthy(env["SNAPSHOT_FRAMES"]) || truthy(env["FRAMEIT"])
+  end
+
+  # Required scheme. A MISSING key raises KeyError (via fetch, like beta/deliver);
+  # a present-but-blank value raises ArgumentError so we fail fast with a clear
+  # message instead of handing "   " to capture_screenshots (which errors later,
+  # less actionably).
+  def scheme(env)
+    value = env.fetch("SCHEME").strip
+    raise ArgumentError, "SCHEME must not be blank" if value.empty?
+
+    value
   end
 
   # SNAPSHOT_OUTPUT_DIR override, defaulting to `./screenshots`. Blank/whitespace
