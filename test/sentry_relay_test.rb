@@ -116,6 +116,34 @@ class SentryRelayTest < Minitest::Test
     assert_includes out[:text], "Sentry"
   end
 
+  # --- parse_port: blank => default, valid range, fail fast on garbage ---
+
+  def test_parse_port_defaults_when_blank
+    assert_equal 8080, SentryRelay.parse_port(nil)
+    assert_equal 8080, SentryRelay.parse_port("")
+    assert_equal 8080, SentryRelay.parse_port("   ")
+  end
+
+  def test_parse_port_accepts_a_valid_port
+    assert_equal 3000, SentryRelay.parse_port("3000")
+    assert_equal 3000, SentryRelay.parse_port("  3000\n")
+    assert_equal 1, SentryRelay.parse_port("1")
+    assert_equal 65_535, SentryRelay.parse_port("65535")
+  end
+
+  def test_parse_port_rejects_non_numeric_with_clear_message
+    # Non-numeric PORT must raise a purpose-built message, not a bare Integer()
+    # ArgumentError stack trace.
+    err = assert_raises(RuntimeError) { SentryRelay.parse_port("eighty-eighty") }
+    assert_includes err.message, "PORT must be an integer"
+  end
+
+  def test_parse_port_rejects_out_of_range
+    assert_raises(RuntimeError) { SentryRelay.parse_port("0") }
+    assert_raises(RuntimeError) { SentryRelay.parse_port("65536") }
+    assert_raises(RuntimeError) { SentryRelay.parse_port("-1") }
+  end
+
   # --- purity: the testable helpers log nothing (no secret/token leak) ---
 
   def test_helpers_print_nothing

@@ -118,7 +118,7 @@ module SentryRelay
     secret    = required_env(env, SECRET_ENV)
     bot_token = required_env(env, BOT_TOKEN_ENV)
     chat_id   = required_env(env, CHAT_ID_ENV)
-    port      = (env["PORT"].to_s.strip.empty? ? 8080 : Integer(env["PORT"]))
+    port      = parse_port(env["PORT"])
 
     serve(port: port, secret: secret, bot_token: bot_token, chat_id: chat_id, out: out)
   end
@@ -132,6 +132,21 @@ module SentryRelay
     value
   end
   private_class_method :required_env
+
+  # Resolve the listen port from a raw ENV value: blank/nil => the 8080 default; an
+  # explicit value must be an integer in the valid TCP range, else fail fast with a
+  # purpose-built message (NOT a bare Integer() ArgumentError stack trace) so a typo'd
+  # PORT is obvious at startup. Pure: no IO, no logging.
+  def parse_port(raw)
+    str = raw.to_s.strip
+    return 8080 if str.empty?
+
+    unless str.match?(/\A\d+\z/) && (1..65_535).cover?(str.to_i)
+      raise "PORT must be an integer between 1 and 65535 (got #{str.inspect})"
+    end
+
+    str.to_i
+  end
 
   # Start a minimal WEBrick server that handles the webhook POST. Untested I/O: it's
   # a socket + a live outbound POST, the same class of live I/O as the dSYM upload.
