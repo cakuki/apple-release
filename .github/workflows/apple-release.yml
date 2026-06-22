@@ -25,6 +25,16 @@ on:
         required: false
         type: string
         default: "false"
+      testflight-distribute-external:
+        description: "Opt into EXTERNAL TestFlight distribution (distribute_external lane). Default false = internal testers only."
+        required: false
+        type: string
+        default: "false"
+      testflight-groups:
+        description: "Comma-separated external TestFlight group names (only used when testflight-distribute-external is true)."
+        required: false
+        type: string
+        default: ""
       xcode-version:
         description: "Xcode version to select (Apple requires the latest SDK for uploads)"
         required: false
@@ -61,6 +71,8 @@ jobs:
       XCODEPROJ: ${{ inputs.xcodeproj }}
       TEST_DEVICE: ${{ inputs.test-device }}
       DELIVER_SUBMIT: ${{ inputs.deliver-submit }}
+      TESTFLIGHT_DISTRIBUTE_EXTERNAL: ${{ inputs.testflight-distribute-external }}
+      TESTFLIGHT_GROUPS: ${{ inputs.testflight-groups }}
       MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
