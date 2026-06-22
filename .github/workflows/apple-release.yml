@@ -46,7 +46,7 @@ on:
         type: string
         default: ""
       snapshot-devices:
-        description: "Comma/newline-separated simulator device names for the screenshots lane (snapshot). Empty => a single representative device (iPhone 16 Pro)."
+        description: "Comma/newline-separated simulator device names for the screenshots lane (snapshot). Empty => a single representative device (iPhone 16)."
         required: false
         type: string
         default: ""

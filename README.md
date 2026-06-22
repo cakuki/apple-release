@@ -143,7 +143,7 @@ PNGs). Tune it via environment variables (all optional):
 | Env var | Required? | Default | What |
 | --- | --- | --- | --- |
 | `SCHEME` | yes | — | scheme whose `test` action runs the UI-test target |
-| `SNAPSHOT_DEVICES` | no | `iPhone 16 Pro` | comma/newline-separated simulator device names |
+| `SNAPSHOT_DEVICES` | no | `iPhone 16` | comma/newline-separated simulator device names |
 | `SNAPSHOT_LANGUAGES` | no | `en-US` | comma/newline-separated language codes |
 | `SNAPSHOT_OUTPUT_DIR` | no | `./screenshots` | where images are written (relative to `fastlane/`) |
 | `SNAPSHOT_FRAMES` / `FRAMEIT` | no | `false` | set `true` to run `frameit` and add device frames |
