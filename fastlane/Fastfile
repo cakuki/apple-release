@@ -390,9 +390,17 @@ def fetch_customer_reviews(bundle_id)
         "?limit=200&sort=-createdDate"
   reviews = []
   seen = Set.new
-  while url && seen.add?(url)
+  while url
+    # A repeated cursor means a server-side paging bug — fail fast rather than
+    # loop forever OR silently return a partial set (which would look complete).
+    UI.user_error!("ASC pagination returned a repeated cursor: #{url}") unless seen.add?(url)
     page = asc_get(url, token)
-    (page["data"] || []).each { |entry| reviews << entry["attributes"] }
+    # Only collect Hash attributes; an unexpected payload shape would otherwise
+    # push nil/non-Hash and crash ReviewDigest.build (which assumes Hashes).
+    (page["data"] || []).each do |entry|
+      attrs = entry["attributes"]
+      reviews << attrs if attrs.is_a?(Hash)
+    end
     url = page.dig("links", "next")
   end
   reviews
@@ -413,6 +421,7 @@ end
 # GET a single ASC URL with the Bearer token and parse the JSON body. Raises on a
 # non-2xx so a failed fetch stops the lane (read-only, so nothing is left dirty).
 def asc_get(url, token)
+  require "json"
   uri = URI(url)
   http = Net::HTTP.new(uri.host, uri.port)
   http.use_ssl = true
@@ -430,7 +439,13 @@ def asc_get(url, token)
     body = response.body.to_s[0, 500]
     UI.user_error!("ASC GET #{uri} failed: #{response.code} #{response.message}\n#{body}")
   end
-  JSON.parse(response.body)
+  # A 2xx with a non-JSON body (e.g. a proxy injecting HTML) should be a clear
+  # fastlane error, not a raw JSON::ParserError stack trace.
+  begin
+    JSON.parse(response.body)
+  rescue JSON::ParserError
+    UI.user_error!("ASC GET #{uri} returned a non-JSON body: #{response.body.to_s[0, 500]}")
+  end
 end
 
 # Upload the dSYMs gym just produced to Sentry so crash reports are symbolicated
