@@ -123,8 +123,14 @@ class ReviewDigestTest < Minitest::Test
   end
 
   def test_new_since_nil_when_no_since_option
-    # No `since:` => new_since is nil (the lane prints "n/a"), NOT a count.
+    # No `since:` => new_since is nil (format omits the "New since" line), NOT a count.
     assert_nil ReviewDigest.build(reviews)[:new_since]
+  end
+
+  def test_since_without_timezone_offset_is_rejected
+    # An offset-less ISO string would be interpreted in the local zone by
+    # Time.iso8601, so it's treated as unusable (nil) for an absolute-instant cutoff.
+    assert_nil ReviewDigest.build(reviews, since: "2026-06-10T00:00:00")[:new_since]
   end
 
   def test_unparseable_since_is_best_effort_nil_not_a_crash

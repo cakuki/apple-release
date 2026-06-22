@@ -40,8 +40,8 @@
 #     entries are the FULL review hashes so the lane can print title/body/territory.
 #   * "New since" is parameterized as an ISO8601 string in options[:since]; a review
 #     is "new" iff its createdDate is STRICTLY AFTER `since` (absolute instant, so
-#     timezone offsets are honored). No since => new_since is nil (the lane prints
-#     "n/a") rather than a misleading count.
+#     timezone offsets are honored). No since => new_since is nil and `format`
+#     OMITS the "New since" line entirely (rather than a misleading count).
 #   * Empty / nil input is a clean digest (total 0, average nil, all-zero breakdown,
 #     no flagged) — never a crash or a divide-by-zero.
 require "time"
@@ -112,9 +112,9 @@ module ReviewDigest
   private_class_method :breakdown
 
   # Count of reviews created STRICTLY AFTER `since` (an ISO8601 String), comparing
-  # absolute instants so timezone offsets are honored. nil `since` => nil (the lane
-  # prints "n/a", not a count). A review with an unparseable createdDate is treated
-  # as NOT new (conservative: don't inflate the "new" count on bad data). Internal.
+  # absolute instants so timezone offsets are honored. nil `since` => nil (and
+  # `format` omits the "New since" line). A review with an unparseable createdDate
+  # is treated as NOT new (conservative: don't inflate "new" on bad data). Internal.
   def new_since_count(reviews, since)
     return nil if since.nil? || since.to_s.strip.empty?
 
@@ -157,12 +157,19 @@ module ReviewDigest
 
   # Best-effort ISO8601 parse; nil on anything unparseable (so a bad createdDate
   # or `since` never crashes the digest). Internal helper.
+  # Offset suffix (Z or ±HH:MM) — required for an absolute instant.
+  OFFSET_SUFFIX = /(?:Z|[+-]\d{2}:\d{2})\z/.freeze
+
   def parse_time(value)
-    # Time.iso8601 (not the permissive Time.parse): both `createdDate` and the
-    # `since` cutoff are documented ISO8601 instants, and iso8601 requires an
-    # explicit offset so comparisons are always on absolute instants rather than
-    # the runner's local zone. Anything non-ISO8601 => nil (best-effort).
-    Time.iso8601(value.to_s)
+    s = value.to_s
+    # Require an explicit timezone offset. Time.iso8601 (unlike the documented
+    # contract) ACCEPTS an offset-less string like "2026-06-01T00:00:00" and
+    # interprets it in the runner's LOCAL zone — which would make `createdDate` /
+    # `since` comparisons non-absolute and machine-dependent. Reject those up front
+    # so comparisons are always on absolute instants. Anything else => nil (best-effort).
+    return nil unless s.match?(OFFSET_SUFFIX)
+
+    Time.iso8601(s)
   rescue ArgumentError, TypeError
     nil
   end

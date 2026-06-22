@@ -200,7 +200,7 @@ Tune it via environment variables:
 Run it locally (with the ASC API key env set, as for `beta`):
 
 ```sh
-REVIEWS_SINCE=2026-06-01T00:00:00Z bundle exec fastlane reviews
+APP_IDENTIFIER=com.example.App REVIEWS_SINCE=2026-06-01T00:00:00Z bundle exec fastlane reviews
 ```
 
 The digest math + text live in `fastlane/review_digest.rb` (`ReviewDigest.build` /

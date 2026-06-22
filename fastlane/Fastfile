@@ -308,14 +308,17 @@ platform :ios do
     unless since.empty?
       # Validate up front so a typo fails fast with a clear message instead of
       # silently producing no "new since" line (ReviewDigest is best-effort and
-      # would just drop it). Uses the same Time.iso8601 as ReviewDigest.parse_time.
+      # would just drop it). Require an explicit offset (Z or ±HH:MM) — Time.iso8601
+      # would otherwise accept an offset-less string and interpret it in the local
+      # zone, making the cutoff non-absolute. Matches ReviewDigest.parse_time.
       require "time"
+      unless since.match?(/(?:Z|[+-]\d{2}:\d{2})\z/)
+        UI.user_error!("REVIEWS_SINCE must include a timezone offset (Z or ±HH:MM), e.g. 2026-06-01T00:00:00Z; got: #{since.inspect}")
+      end
       begin
-        # iso8601 (not parse): enforce the documented ISO8601 contract with an
-        # explicit offset, matching ReviewDigest's parse_time.
         Time.iso8601(since)
       rescue ArgumentError
-        UI.user_error!("REVIEWS_SINCE must be an ISO8601 instant with an offset (e.g. 2026-06-01T00:00:00Z); got: #{since.inspect}")
+        UI.user_error!("REVIEWS_SINCE must be a valid ISO8601 instant (e.g. 2026-06-01T00:00:00Z); got: #{since.inspect}")
       end
       options[:since] = since
     end
@@ -404,6 +407,8 @@ def fetch_customer_reviews(bundle_id)
     # Only collect Hash attributes; an unexpected payload shape would otherwise
     # push nil/non-Hash and crash ReviewDigest.build (which assumes Hashes).
     (page["data"] || []).each do |entry|
+      next unless entry.is_a?(Hash) # skip a malformed (non-Hash) data element
+
       attrs = entry["attributes"]
       reviews << attrs if attrs.is_a?(Hash)
     end
