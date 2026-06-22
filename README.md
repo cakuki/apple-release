@@ -122,6 +122,16 @@ maps to `SENTRY_URL`, which sentry-cli reads natively — and keep using the sam
 `SENTRY_AUTH_TOKEN`/`sentry-org`/`sentry-project`. Leave `sentry-url` empty for
 Sentry's SaaS (sentry.io).
 
+#### Alerting (new crash / regression / spike)
+
+To get **alerted** when a new crash, a regression, or a spike happens, see the
+runbook in [`docs/observability-alerting.md`](docs/observability-alerting.md). It
+covers creating the Sentry alert rules and routing them so **Telegram is the
+primary channel** (via the reference relay `scripts/sentry_relay.rb`, which reuses
+the same `notify-telegram` bot) with **email as a zero-code fallback** on the same
+rule. The concise alert message is built by the pure, unit-tested
+`fastlane/sentry_alert.rb`.
+
 ## Screenshots
 
 The `screenshots` lane captures versioned App Store screenshots by driving your app's
