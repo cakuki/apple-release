@@ -32,8 +32,8 @@ class DeliverLaneTest < Minitest::Test
     assert_equal true,  opts[:skip_screenshots],   "screenshots are slice 3 (snapshot/frameit)"
     assert_equal true,  opts[:force],              "CI is non-interactive: no HTML preview confirm"
     assert_equal false, opts[:run_precheck_before_submit], "precheck needs live/network; off until slice 4"
-    assert_equal false, opts[:submit_for_review],  "never auto-submit for review from this lane"
-    assert_equal false, opts[:automatic_release],  "never auto-release from this lane"
+    assert_equal false, opts[:submit_for_review],  "never auto-submit for review by default"
+    assert_equal false, opts[:automatic_release],  "never auto-release from this lane (phased release is slice 3)"
   end
 
   # --- app_identifier comes straight from ENV ---
@@ -94,6 +94,79 @@ class DeliverLaneTest < Minitest::Test
       opts = DeliverOptions.build(env("DELIVER_SUBMIT" => raw))
       assert_equal true, opts[:verify_only],
                    "DELIVER_SUBMIT=#{raw.inspect} must NOT push to ASC (verify_only=true)"
+    end
+  end
+
+  # --- submit-for-review: a SECOND opt-in layered on DELIVER_SUBMIT (slice 2) ---
+  #
+  # submit_for_review only makes sense during a live upload, so it requires BOTH
+  # DELIVER_SUBMIT_FOR_REVIEW=true AND DELIVER_SUBMIT=true. The cross-flag guard
+  # raises if review is requested without the live upload that carries it, so a
+  # caller can't believe they submitted when they only validated.
+
+  def test_submit_for_review_false_by_default
+    # Neither opt-in set => verify-only, and certainly not submitting for review.
+    assert_equal false, DeliverOptions.build(env)[:submit_for_review]
+  end
+
+  def test_submit_for_review_false_when_only_deliver_submit_set
+    # Live upload but no review opt-in => upload happens, review does not.
+    opts = DeliverOptions.build(env("DELIVER_SUBMIT" => "true"))
+    assert_equal false, opts[:verify_only], "DELIVER_SUBMIT=true should go live"
+    assert_equal false, opts[:submit_for_review],
+                 "live upload without DELIVER_SUBMIT_FOR_REVIEW must NOT submit for review"
+  end
+
+  def test_submit_for_review_true_only_when_both_opt_ins_set
+    opts = DeliverOptions.build(
+      env("DELIVER_SUBMIT" => "true", "DELIVER_SUBMIT_FOR_REVIEW" => "true")
+    )
+    assert_equal false, opts[:verify_only],       "DELIVER_SUBMIT=true should go live"
+    assert_equal true,  opts[:submit_for_review], "both opt-ins set => submit for review"
+  end
+
+  # The cross-flag guard: review-on but submit-off is a misconfiguration (you'd be
+  # validating, not submitting), so fail fast rather than silently not submitting.
+  def test_submit_for_review_without_deliver_submit_raises
+    assert_raises(ArgumentError) do
+      DeliverOptions.build(env("DELIVER_SUBMIT_FOR_REVIEW" => "true"))
+    end
+  end
+
+  def test_submit_for_review_without_deliver_submit_raises_even_if_submit_falsey
+    # An explicit non-"true" DELIVER_SUBMIT still isn't a live upload, so a review
+    # opt-in on top of it is still the same misconfiguration => raise.
+    assert_raises(ArgumentError) do
+      DeliverOptions.build(env("DELIVER_SUBMIT" => "false", "DELIVER_SUBMIT_FOR_REVIEW" => "true"))
+    end
+  end
+
+  # Table-drive the DELIVER_SUBMIT_FOR_REVIEW truthiness parse, mirroring the
+  # DELIVER_SUBMIT parse exactly. Only an exact "true" (case-insensitive, trimmed)
+  # flips it on; everything else leaves submit_for_review false. All "true" cases
+  # are paired with DELIVER_SUBMIT=true so the guard doesn't fire.
+  SUBMIT_FOR_REVIEW_TRUE = ["true", "TRUE", "  true", "true\n", " TrUe "].freeze
+  SUBMIT_FOR_REVIEW_FALSE = [
+    "false", "FALSE", "0", "1", "yes", "no", "", "  ", "truee", "nottrue",
+  ].freeze
+
+  def test_submit_for_review_true_variants
+    SUBMIT_FOR_REVIEW_TRUE.each do |raw|
+      opts = DeliverOptions.build(
+        env("DELIVER_SUBMIT" => "true", "DELIVER_SUBMIT_FOR_REVIEW" => raw)
+      )
+      assert_equal true, opts[:submit_for_review],
+                   "DELIVER_SUBMIT_FOR_REVIEW=#{raw.inspect} (with DELIVER_SUBMIT=true) should submit for review"
+    end
+  end
+
+  def test_non_true_submit_for_review_stays_off
+    SUBMIT_FOR_REVIEW_FALSE.each do |raw|
+      opts = DeliverOptions.build(
+        env("DELIVER_SUBMIT" => "true", "DELIVER_SUBMIT_FOR_REVIEW" => raw)
+      )
+      assert_equal false, opts[:submit_for_review],
+                   "DELIVER_SUBMIT_FOR_REVIEW=#{raw.inspect} must NOT submit for review"
     end
   end
 
