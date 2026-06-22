@@ -106,7 +106,13 @@ module ReviewDigest
   def new_since_count(reviews, since)
     return nil if since.nil? || since.to_s.strip.empty?
 
-    cutoff = Time.parse(since)
+    # Best-effort cutoff parse, same policy as createdDate: an unparseable `since`
+    # yields nil (no count) rather than crashing the pure digest. The lane
+    # validates REVIEWS_SINCE up front and fails fast with a clear message, so this
+    # is the defensive backstop.
+    cutoff = parse_time(since)
+    return nil if cutoff.nil?
+
     reviews.count do |r|
       created = parse_time(r["createdDate"])
       created && created > cutoff
@@ -133,7 +139,10 @@ module ReviewDigest
     lines << "  Total reviews: #{digest[:total]}"
     lines << "  Average rating: #{digest[:average]}"
 
-    unless digest[:since].nil?
+    # Gate on the COUNT, not on :since — so a valid cutoff with 0 new reviews still
+    # prints (0 is meaningful), while a nil/blank/unparseable cutoff (new_since nil)
+    # prints nothing instead of a confusing line with an empty date or `nil` count.
+    unless digest[:new_since].nil?
       lines << "  New since #{digest[:since]}: #{digest[:new_since]}"
     end
 

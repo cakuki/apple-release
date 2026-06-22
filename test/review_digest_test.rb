@@ -124,6 +124,17 @@ class ReviewDigestTest < Minitest::Test
     assert_nil ReviewDigest.build(reviews)[:new_since]
   end
 
+  def test_unparseable_since_is_best_effort_nil_not_a_crash
+    # A garbage `since` must not raise out of the pure digest (the lane validates
+    # and fails fast up front); here it degrades to nil, same as a bad createdDate.
+    assert_nil ReviewDigest.build(reviews, since: "not-a-date")[:new_since]
+  end
+
+  def test_format_omits_new_since_for_unparseable_since
+    text = ReviewDigest.format(ReviewDigest.build(reviews, since: "not-a-date"))
+    refute_includes text, "New since"
+  end
+
   def test_new_since_handles_mixed_timezones
     # createdDate carries an offset; comparison is on the absolute instant, so a
     # -07:00 review at 23:00 on 06-09 is actually 06-10T06:00Z — after a UTC since.
