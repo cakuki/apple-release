@@ -33,7 +33,8 @@ class DeliverLaneTest < Minitest::Test
     assert_equal true,  opts[:force],              "CI is non-interactive: no HTML preview confirm"
     assert_equal false, opts[:run_precheck_before_submit], "precheck needs live/network; off until slice 4"
     assert_equal false, opts[:submit_for_review],  "never auto-submit for review by default"
-    assert_equal false, opts[:automatic_release],  "never auto-release from this lane (phased release is slice 3)"
+    assert_equal false, opts[:phased_release],     "never phase-release by default (opt-in DELIVER_PHASED_RELEASE)"
+    assert_equal false, opts[:automatic_release],  "never auto-release from this lane (phased release is the controlled alternative)"
   end
 
   # --- app_identifier comes straight from ENV ---
@@ -167,6 +168,108 @@ class DeliverLaneTest < Minitest::Test
       )
       assert_equal false, opts[:submit_for_review],
                    "DELIVER_SUBMIT_FOR_REVIEW=#{raw.inspect} must NOT submit for review"
+    end
+  end
+
+  # --- phased release: a THIRD opt-in layered on DELIVER_SUBMIT (slice 3) ---
+  #
+  # phased_release governs how an APPROVED version rolls out to users gradually,
+  # so it's only meaningful on a real (live) upload. Like submit-for-review it is
+  # an independent opt-in that requires DELIVER_SUBMIT=true; unlike it, it does NOT
+  # depend on DELIVER_SUBMIT_FOR_REVIEW — phased rollout is configured on the
+  # version regardless of whether THIS run also submits for review (Apple applies
+  # it when the version is approved + released). automatic_release stays false:
+  # phased release is the controlled alternative to an immediate auto-release.
+
+  def test_phased_release_false_by_default
+    # No opt-in set => verify-only, and certainly not a phased release.
+    assert_equal false, DeliverOptions.build(env)[:phased_release]
+  end
+
+  def test_phased_release_false_when_only_deliver_submit_set
+    # Live upload but no phased-release opt-in => upload happens, no phased rollout.
+    opts = DeliverOptions.build(env("DELIVER_SUBMIT" => "true"))
+    assert_equal false, opts[:verify_only], "DELIVER_SUBMIT=true should go live"
+    assert_equal false, opts[:phased_release],
+                 "live upload without DELIVER_PHASED_RELEASE must NOT enable phased rollout"
+  end
+
+  def test_phased_release_true_only_when_both_submit_and_phased_set
+    opts = DeliverOptions.build(
+      env("DELIVER_SUBMIT" => "true", "DELIVER_PHASED_RELEASE" => "true")
+    )
+    assert_equal false, opts[:verify_only],     "DELIVER_SUBMIT=true should go live"
+    assert_equal true,  opts[:phased_release],  "submit + phased opt-in => phased release"
+    assert_equal false, opts[:automatic_release], "phased release is the controlled alternative to auto-release"
+  end
+
+  # phased_release is INDEPENDENT of submit_for_review: it can be on with review
+  # off, and review on with phased off — both ride the same live upload.
+  def test_phased_release_independent_of_submit_for_review
+    opts = DeliverOptions.build(
+      env("DELIVER_SUBMIT" => "true", "DELIVER_PHASED_RELEASE" => "true")
+    )
+    assert_equal true,  opts[:phased_release],
+                 "phased release does not require DELIVER_SUBMIT_FOR_REVIEW"
+    assert_equal false, opts[:submit_for_review],
+                 "phased release on its own must not flip submit_for_review"
+  end
+
+  def test_submit_for_review_and_phased_release_can_both_be_on
+    # The two roll-out opt-ins are orthogonal: submitting for review AND requesting
+    # a phased rollout in the same live upload must both take effect (guard against
+    # a future change accidentally making them mutually exclusive).
+    opts = DeliverOptions.build(
+      env("DELIVER_SUBMIT" => "true",
+          "DELIVER_SUBMIT_FOR_REVIEW" => "true",
+          "DELIVER_PHASED_RELEASE" => "true")
+    )
+    assert_equal true, opts[:submit_for_review], "both opt-ins on: submit_for_review must be true"
+    assert_equal true, opts[:phased_release],    "both opt-ins on: phased_release must be true"
+  end
+
+  # The cross-flag guard: phased-on but submit-off is a misconfiguration (you'd be
+  # validating, not releasing), so fail fast rather than silently not releasing.
+  def test_phased_release_without_deliver_submit_raises
+    assert_raises(ArgumentError) do
+      DeliverOptions.build(env("DELIVER_PHASED_RELEASE" => "true"))
+    end
+  end
+
+  def test_phased_release_without_deliver_submit_raises_even_if_submit_falsey
+    # An explicit non-"true" DELIVER_SUBMIT still isn't a live upload, so a phased
+    # opt-in on top of it is still the same misconfiguration => raise.
+    assert_raises(ArgumentError) do
+      DeliverOptions.build(env("DELIVER_SUBMIT" => "false", "DELIVER_PHASED_RELEASE" => "true"))
+    end
+  end
+
+  # Table-drive the DELIVER_PHASED_RELEASE truthiness parse, mirroring the
+  # DELIVER_SUBMIT parse exactly. Only an exact "true" (case-insensitive, trimmed)
+  # flips it on; everything else leaves phased_release false. All "true" cases are
+  # paired with DELIVER_SUBMIT=true so the guard doesn't fire.
+  PHASED_RELEASE_TRUE = ["true", "TRUE", "  true", "true\n", " TrUe "].freeze
+  PHASED_RELEASE_FALSE = [
+    "false", "FALSE", "0", "1", "yes", "no", "", "  ", "truee", "nottrue",
+  ].freeze
+
+  def test_phased_release_true_variants
+    PHASED_RELEASE_TRUE.each do |raw|
+      opts = DeliverOptions.build(
+        env("DELIVER_SUBMIT" => "true", "DELIVER_PHASED_RELEASE" => raw)
+      )
+      assert_equal true, opts[:phased_release],
+                   "DELIVER_PHASED_RELEASE=#{raw.inspect} (with DELIVER_SUBMIT=true) should enable phased release"
+    end
+  end
+
+  def test_non_true_phased_release_stays_off
+    PHASED_RELEASE_FALSE.each do |raw|
+      opts = DeliverOptions.build(
+        env("DELIVER_SUBMIT" => "true", "DELIVER_PHASED_RELEASE" => raw)
+      )
+      assert_equal false, opts[:phased_release],
+                   "DELIVER_PHASED_RELEASE=#{raw.inspect} must NOT enable phased release"
     end
   end
 
