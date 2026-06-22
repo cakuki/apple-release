@@ -8,6 +8,7 @@ require_relative "deliver_release_notes"
 require_relative "external_testflight_options"
 require_relative "release_plan"
 require_relative "sentry_dsym_options"
+require_relative "snapshot_options"
 require_relative "version_bumper"
 
 # match storage repo (Matchfile isn't imported via import_from_git, so set it here).
@@ -251,6 +252,30 @@ platform :ios do
       api_key:   asc_api_key,
       changelog: changelog_from_md
     ))
+  end
+
+  desc "Capture App Store screenshots via UI tests (snapshot), optionally frame them (frameit). NON-LIVE: local only, never uploads."
+  lane :screenshots do
+    # Capture versioned App Store screenshots by driving the app's UI-test target
+    # on simulators (fastlane snapshot). NON-LIVE by design: this only writes
+    # local images into the output dir and NEVER uploads — uploading screenshots
+    # rides the owner-gated `deliver` slice 4. SnapshotOptions.build is pure +
+    # unit-tested (see test/snapshot_options_test.rb): it assembles the
+    # capture_screenshots kwargs from ENV (SCHEME required; SNAPSHOT_DEVICES /
+    # SNAPSHOT_LANGUAGES default to a single representative device + en-US;
+    # SNAPSHOT_OUTPUT_DIR default ./screenshots; XCODEPROJ attached only when set).
+    # Keeping the assembly fastlane-free means everything except the actual
+    # simulator capture is testable.
+    opts = SnapshotOptions.build(ENV)
+    capture_screenshots(**opts)
+
+    # OPT-IN: device framing (frameit). OFF by default — frames are heavy (extra
+    # assets) and opinionated (a specific marketing look) — so only an explicit
+    # SNAPSHOT_FRAMES=true / FRAMEIT=true (the pure SnapshotOptions.frame? decides)
+    # runs frameit over the just-captured images, in place under the same output dir.
+    if SnapshotOptions.frame?(ENV)
+      frame_screenshots(path: opts[:output_directory])
+    end
   end
 end
 
