@@ -31,12 +31,15 @@ module SnapshotOptions
 
   # A single representative device when SNAPSHOT_DEVICES is unset: a multi-device
   # matrix is slow and opinionated, so default narrow and let callers opt into
-  # more. iPhone 16 Pro is a current, ASC-accepted screenshot size.
+  # more. Plain "iPhone 16" (not the "Pro" variant) is the widely-preinstalled
+  # simulator on CI images and matches the template's local-testing baseline
+  # (ios-app-template docs/USING-THIS-TEMPLATE.md), so the default capture works
+  # out of the box.
   # Element strings are frozen too (not just the array): `devices`/`languages`
   # return a `.dup` of these defaults, and a caller mutating an element in place
   # (e.g. `opts[:devices][0] << "x"`) would otherwise corrupt the constant for
   # every later call.
-  DEFAULT_DEVICES = ["iPhone 16 Pro".freeze].freeze
+  DEFAULT_DEVICES = ["iPhone 16".freeze].freeze
 
   # Default a single language (US English) when SNAPSHOT_LANGUAGES is unset —
   # ASC's primary/default locale and the minimum a listing needs.
@@ -57,9 +60,11 @@ module SnapshotOptions
       # Wipe the output dir each run so captures are deterministic and never
       # mixed with stale images from a previous device/locale set.
       clear_previous_screenshots: true,
-      # Never auto-open the HTML summary; snapshot still writes it as a local
-      # convenience, but CI must stay non-interactive (false = don't skip writing
-      # it; snapshot only *opens* it when not running headless).
+      # Leave snapshot's own HTML summary behavior to its CI/headless detection:
+      # `skip_open_summary: false` does NOT force-open anything — snapshot still
+      # only *opens* the summary on an interactive local run and stays quiet when
+      # it detects CI/headless. We keep it false so a local `fastlane snapshot`
+      # gets the convenience preview, while CI runs never pop a browser.
       skip_open_summary:          false,
     }
     # Only name the project when given — keeps the default build cwd-relative and

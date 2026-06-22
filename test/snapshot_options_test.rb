@@ -91,7 +91,7 @@ class SnapshotOptionsTest < Minitest::Test
   def test_devices_default_is_single_representative_device
     # Default a single representative device when unset: a multi-device matrix is
     # slow + opinionated, so opt into more via SNAPSHOT_DEVICES rather than defaulting wide.
-    assert_equal ["iPhone 16 Pro"], SnapshotOptions.build(env)[:devices]
+    assert_equal ["iPhone 16"], SnapshotOptions.build(env)[:devices]
   end
 
   def test_devices_parsed_from_comma_list
@@ -116,7 +116,7 @@ class SnapshotOptionsTest < Minitest::Test
 
   def test_blank_devices_falls_back_to_default
     ["", "   ", ",", " , ,", "\n"].each do |blank|
-      assert_equal ["iPhone 16 Pro"], SnapshotOptions.build(env("SNAPSHOT_DEVICES" => blank))[:devices],
+      assert_equal ["iPhone 16"], SnapshotOptions.build(env("SNAPSHOT_DEVICES" => blank))[:devices],
                    "blank/empty SNAPSHOT_DEVICES=#{blank.inspect} => default single device"
     end
   end
