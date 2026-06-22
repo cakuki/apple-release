@@ -83,15 +83,16 @@ The `beta` lane can upload your build's dSYMs to **Sentry** so crash reports are
 symbolicated. It is **off by default and fully optional** — apps with no Sentry
 account ship to TestFlight exactly as before, and CI stays green.
 
-To enable it, set **all three** of these for the app (any one missing/blank ⇒
-the step is a clean no-op, never a failure):
+To enable it, set the **three required** values below for the app (any one
+missing/blank ⇒ the step is a clean no-op, never a failure); `sentry-url` is
+optional:
 
-| Where | Name | What |
-| --- | --- | --- |
-| repo **secret** | `SENTRY_AUTH_TOKEN` | Sentry auth token with dSYM-upload scope (never logged) |
-| workflow input | `sentry-org` | your Sentry org slug |
-| workflow input | `sentry-project` | your Sentry project slug |
-| workflow input | `sentry-url` | *(optional)* self-hosted instance base URL; omit for sentry.io |
+| Where | Name | Required? | What |
+| --- | --- | --- | --- |
+| repo **secret** | `SENTRY_AUTH_TOKEN` | yes | Sentry auth token with dSYM-upload scope (never logged) |
+| workflow input | `sentry-org` | yes | your Sentry org slug |
+| workflow input | `sentry-project` | yes | your Sentry project slug |
+| workflow input | `sentry-url` | no | self-hosted instance base URL; omit for sentry.io |
 
 > **What gets uploaded:** the lane runs `sentry-cli debug-files upload --include-sources`, so in addition to the dSYMs it uploads **embedded source context** for your app's code where available — handy for readable stack traces, but be aware your source is sent to the configured Sentry/GlitchTip server.
 

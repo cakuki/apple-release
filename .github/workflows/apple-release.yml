@@ -148,15 +148,35 @@ jobs:
           path: ~/Library/Developer/Xcode/DerivedData
           key: deriveddata-${{ runner.os }}-${{ hashFiles('**/*.xcodeproj/**', '**/Package.resolved') }}
 
-      # Install sentry-cli ONLY when Sentry is fully configured — the beta lane
-      # shells out to it for dSYM upload (EPIC-06 s2) and GitHub's macOS runner
-      # images don't ship it. Gated on ALL THREE of token/org/project (matching
-      # the lane's no-op condition) so a repo with only a stray secret — or any
-      # app with no Sentry account — adds zero install time and stays green.
-      # Installs into a user dir (no sudo) and prepends it to PATH. Pin a specific
-      # build by setting SENTRY_CLI_VERSION if a reproducible version is needed.
+      # The beta lane shells out to sentry-cli for dSYM upload (EPIC-06 s2) and
+      # GitHub's macOS runner images don't ship it, so install it first — but ONLY
+      # when Sentry is fully + USABLY configured, so an app with no Sentry account
+      # (or only a stray secret) adds zero install time and stays green.
+      #
+      # This step decides that, mirroring the lane's SentryDsymOptions EXACTLY:
+      # all three of token/org/project must be present AND not an unexpanded
+      # $(...)/${...} placeholder (which the lane treats as unset). Gating the
+      # install on this — rather than a bare non-empty check — keeps the install's
+      # condition identical to the lane's no-op condition, so a placeholder value
+      # doesn't waste time installing a CLI the lane won't use.
+      - name: Detect Sentry config
+        id: sentry
+        run: |
+          set -euo pipefail
+          usable() { # non-empty AND not a $(...)/${...} placeholder
+            case "$1" in
+              "" | '$('*')' | '${'*'}') return 1 ;;
+              *) return 0 ;;
+            esac
+          }
+          if usable "${SENTRY_AUTH_TOKEN:-}" && usable "${SENTRY_ORG:-}" && usable "${SENTRY_PROJECT:-}"; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install sentry-cli (dSYM upload)
-        if: ${{ env.SENTRY_AUTH_TOKEN != '' && env.SENTRY_ORG != '' && env.SENTRY_PROJECT != '' }}
+        if: ${{ steps.sentry.outputs.enabled == 'true' }}
         run: |
           set -euo pipefail
           # -f: fail on HTTP errors so a bad download doesn't silently "succeed"
