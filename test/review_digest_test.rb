@@ -168,6 +168,13 @@ class ReviewDigestTest < Minitest::Test
     assert_equal 0, digest[:flagged_count]               # no 0/nil flagged
   end
 
+  def test_format_shows_na_average_when_reviews_have_no_valid_ratings
+    # Reviews present but none with a valid rating => average nil => "n/a", not blank.
+    rs = [review(rating: nil, created: "2026-06-01T00:00:00Z")]
+    text = ReviewDigest.format(ReviewDigest.build(rs))
+    assert_includes text, "Average rating: n/a"
+  end
+
   def test_numeric_string_rating_is_accepted
     rs = [review(rating: "1", created: "2026-06-01T00:00:00Z")]
     assert_equal 1, ReviewDigest.build(rs)[:flagged_count]

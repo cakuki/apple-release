@@ -125,8 +125,6 @@ module ReviewDigest
   end
   private_class_method :new_since_count
 
-  # Best-effort ISO8601 parse; nil on anything unparseable (so a bad createdDate
-  # never crashes the digest and never counts as "new"). Internal helper.
   # Parse a star rating to an Integer in 1..5, or nil if missing / non-numeric /
   # out of range (best-effort, like parse_time). Accepts an Integer or a numeric
   # String. Used for both review ratings and the flag threshold. Internal.
@@ -140,6 +138,8 @@ module ReviewDigest
   end
   private_class_method :parse_rating
 
+  # Best-effort ISO8601 parse; nil on anything unparseable (so a bad createdDate
+  # or `since` never crashes the digest). Internal helper.
   def parse_time(value)
     # Time.iso8601 (not the permissive Time.parse): both `createdDate` and the
     # `since` cutoff are documented ISO8601 instants, and iso8601 requires an
@@ -159,7 +159,9 @@ module ReviewDigest
 
     lines = ["App Store reviews digest"]
     lines << "  Total reviews: #{digest[:total]}"
-    lines << "  Average rating: #{digest[:average]}"
+    # average is nil only in the pathological case of reviews present but none with
+    # a valid 1..5 rating — render "n/a" rather than a blank/nil value.
+    lines << "  Average rating: #{digest[:average] || 'n/a'}"
 
     # Gate on the COUNT, not on :since — so a valid cutoff with 0 new reviews still
     # prints (0 is meaningful), while a nil/blank/unparseable cutoff (new_since nil)
