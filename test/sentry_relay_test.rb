@@ -81,6 +81,10 @@ class SentryRelayTest < Minitest::Test
     # accept an unsigned webhook just because the relay is misconfigured).
     refute SentryRelay.verify_signature(BODY, valid_sig, nil)
     refute SentryRelay.verify_signature(BODY, valid_sig, "")
+    # A whitespace-only secret is "no secret configured" => reject (consistent with
+    # required_env, which strips). Don't treat "   "/"\n" as a usable secret.
+    refute SentryRelay.verify_signature(BODY, valid_sig, "   ")
+    refute SentryRelay.verify_signature(BODY, valid_sig, "\n")
   end
 
   def test_signature_compare_is_case_sensitive

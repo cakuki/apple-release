@@ -66,7 +66,11 @@ module SentryRelay
 
     return false unless body.is_a?(String)
     return false unless signature.is_a?(String)
-    return false unless secret.is_a?(String) && !secret.empty?
+    # Fail closed on a blank secret, consistent with required_env: a whitespace-only
+    # secret ("   "/"\n") is treated as "no secret configured" and rejected. The HMAC
+    # below still uses the secret verbatim (a real shared secret has no surrounding
+    # whitespace; required_env strips the served value at startup anyway).
+    return false unless secret.is_a?(String) && !secret.strip.empty?
 
     # Sentry sends a lowercase 64-char hex SHA-256 digest. Validate the SHAPE
     # (after trimming surrounding whitespace) before comparing: rejects malformed
