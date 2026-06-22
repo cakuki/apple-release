@@ -416,10 +416,15 @@ end
 def asc_jwt(key)
   require "jwt"
   require "openssl"
+  # Parse the EC private key PEM ONCE and reuse it (a fresh JWT is still minted per
+  # call) — the paging loop calls this many times and re-parsing each time is
+  # wasted work. Memoized by key_id.
+  @asc_ec_keys ||= {}
+  ec = (@asc_ec_keys[key[:key_id]] ||= OpenSSL::PKey::EC.new(key[:key]))
   now = Time.now.to_i
   JWT.encode(
     { iss: key[:issuer_id], iat: now, exp: now + 600, aud: "appstoreconnect-v1" },
-    OpenSSL::PKey::EC.new(key[:key]),
+    ec,
     "ES256",
     { kid: key[:key_id], typ: "JWT" }
   )

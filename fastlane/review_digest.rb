@@ -72,8 +72,12 @@ module ReviewDigest
     # average, adding a phantom flag, and breaking the breakdown sum). Consistent
     # with parse_time's best-effort policy. ASC always sends 1..5, so in practice
     # nothing is dropped; this is the defensive backstop.
-    ratings = reviews.map { |r| parse_rating(r["rating"]) }.compact
-    flagged = reviews.select { |r| (v = parse_rating(r["rating"])) && v <= threshold }
+    # Parse each review's rating ONCE (reused for both the ratings list and the
+    # flagged selection) so a large set isn't parsed twice.
+    rated   = reviews.map { |r| [r, parse_rating(r["rating"])] }
+    ratings = rated.map { |(_review, rating)| rating }.compact
+    flagged = rated.select { |(_review, rating)| rating && rating <= threshold }
+                   .map { |(review, _rating)| review }
 
     {
       total:         reviews.length,
