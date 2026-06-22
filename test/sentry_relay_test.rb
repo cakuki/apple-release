@@ -14,8 +14,8 @@ require_relative "../scripts/sentry_relay"
 # dSYM upload / ASC fetch). What IS pure and asserted here:
 #
 #   * verify_signature — a CONSTANT-TIME HMAC-SHA256 hex compare; the security gate
-#     that rejects forged/replayed webhooks. The single most important thing to get
-#     right, and fully testable without a socket.
+#     that rejects forged webhooks (wrong/missing signature). The single most
+#     important thing to get right, and fully testable without a socket.
 #   * build_telegram_payload — assembling the Bot API `sendMessage` body (chat_id +
 #     text) from the formatted message, so a malformed Sentry payload still yields a
 #     well-formed Telegram request rather than a crash.
@@ -43,6 +43,18 @@ class SentryRelayTest < Minitest::Test
 
   def test_rejects_a_wrong_signature
     refute SentryRelay.verify_signature(BODY, "deadbeef", SECRET)
+  end
+
+  def test_rejects_a_non_64_hex_signature_shape
+    # Wrong length or non-hex chars are rejected on shape before any compare.
+    refute SentryRelay.verify_signature(BODY, "z" * 64, SECRET), "non-hex chars"
+    refute SentryRelay.verify_signature(BODY, valid_sig + "0", SECRET), "too long"
+    refute SentryRelay.verify_signature(BODY, valid_sig.upcase, SECRET), "uppercase hex"
+  end
+
+  def test_accepts_a_whitespace_padded_signature
+    # Surrounding whitespace is trimmed before validation/compare.
+    assert SentryRelay.verify_signature(BODY, "  #{valid_sig}\n", SECRET)
   end
 
   def test_rejects_a_signature_for_a_different_body

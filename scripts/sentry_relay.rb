@@ -65,23 +65,35 @@ module SentryRelay
     require "openssl"
 
     return false unless body.is_a?(String)
-    return false unless signature.is_a?(String) && !signature.empty?
+    return false unless signature.is_a?(String)
     return false unless secret.is_a?(String) && !secret.empty?
 
+    # Sentry sends a lowercase 64-char hex SHA-256 digest. Validate the SHAPE
+    # (after trimming surrounding whitespace) before comparing: rejects malformed
+    # or oversized attacker-controlled headers and guarantees equal length for the
+    # constant-time compare below.
+    candidate = signature.strip
+    return false unless candidate.match?(/\A[0-9a-f]{64}\z/)
+
     expected = OpenSSL::HMAC.hexdigest(OpenSSL::Digest.new("sha256"), secret, body)
-    secure_compare(expected, signature)
+    secure_compare(expected, candidate)
   end
 
-  # Constant-time string comparison. Prefers OpenSSL.secure_compare (stdlib, Ruby
-  # 2.6+); falls back to a manual byte-XOR accumulation that also compares lengths
-  # in constant time, so the relay works even on a build without the helper. Returns
-  # false on a length mismatch without leaking WHERE it differs. Internal helper.
+  # Constant-time comparison of two EQUAL-LENGTH strings (the caller guarantees this
+  # by validating a fixed 64-char hex signature). Prefers
+  # OpenSSL.fixed_length_secure_compare (the widely-available stdlib helper), then
+  # OpenSSL.secure_compare, else a manual byte-XOR accumulation. The length check
+  # is a fast pre-guard, not a secret — both sides are fixed-length hex digests, so
+  # an early return on a length mismatch leaks nothing. Internal helper.
   def secure_compare(a, b)
     require "openssl"
 
-    return OpenSSL.secure_compare(a, b) if OpenSSL.respond_to?(:secure_compare)
-
     return false unless a.bytesize == b.bytesize
+
+    if OpenSSL.respond_to?(:fixed_length_secure_compare)
+      return OpenSSL.fixed_length_secure_compare(a, b)
+    end
+    return OpenSSL.secure_compare(a, b) if OpenSSL.respond_to?(:secure_compare)
 
     diff = 0
     a.bytes.zip(b.bytes) { |x, y| diff |= x ^ y }
@@ -132,7 +144,9 @@ module SentryRelay
       handle_request(req, res, secret: secret, bot_token: bot_token,
                                chat_id: chat_id, out: out)
     end
-    trap("INT") { server.shutdown }
+    # Handle both INT (Ctrl-C, local) and TERM (container/host shutdown) so the
+    # server shuts down cleanly in either context.
+    %w[INT TERM].each { |sig| trap(sig) { server.shutdown } }
     # Token-free startup line — never logs the secret/token.
     out.puts("sentry_relay listening on :#{port} (POST your Sentry webhook here)")
     server.start
@@ -201,9 +215,19 @@ module SentryRelay
     uri = URI("https://api.telegram.org/bot#{bot_token}/sendMessage")
     http = Net::HTTP.new(uri.host, uri.port)
     http.use_ssl = true
+    # Bounded waits so a slow/hung Telegram request can't block the WEBrick handler.
+    http.open_timeout = 10
+    http.read_timeout = 15
     request = Net::HTTP::Post.new(uri.request_uri, "Content-Type" => "application/json")
     request.body = JSON.generate(message)
-    http.request(request)
+    response = http.request(request)
+    unless response.is_a?(Net::HTTPSuccess)
+      # Raise on a non-2xx so the handler returns an error instead of silently
+      # reporting "ok". The bot token is in the URL, NOT in this message, so the
+      # error leaks no secret.
+      raise "Telegram sendMessage failed: #{response.code} #{response.message}"
+    end
+    response
   end
   private_class_method :send_to_telegram
 end

@@ -70,7 +70,9 @@ stdlib-only Ruby service (no bundler). On each POST it:
 1. reads the raw body,
 2. **verifies** `Sentry-Hook-Signature` (HMAC-SHA256 of the body under
    `SENTRY_WEBHOOK_SECRET`, **constant-time** compare) and **rejects** a mismatch
-   with `401` — so a forged or replayed webhook is dropped,
+   with `401` — so a forged webhook (wrong/missing signature) is dropped. (HMAC
+   alone does not prevent a verbatim **replay** of a genuine request; that would
+   need an extra nonce/timestamp check, which Sentry's hook doesn't provide here.)
 3. parses the JSON,
 4. formats a concise message with the **pure, unit-tested** core
    [`fastlane/sentry_alert.rb`](../fastlane/sentry_alert.rb)
