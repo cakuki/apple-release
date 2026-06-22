@@ -21,8 +21,16 @@
 # `DELIVER_SUBMIT`). Because a submission can only ride a live upload, requesting
 # review without `DELIVER_SUBMIT=true` is a misconfiguration — `build` fails fast
 # (ArgumentError) rather than silently validating, so a caller can't believe they
-# submitted when they only ran a verify. `automatic_release` stays false (phased
-# release is slice 3).
+# submitted when they only ran a verify.
+#
+# Phased release (EPIC-08 slice 3) is a THIRD, independent opt-in, also layered on
+# the live upload: `phased_release` is only true when `DELIVER_PHASED_RELEASE=true`
+# (same exact-"true" parse). It governs how an APPROVED version rolls out to users
+# gradually, so it too requires `DELIVER_SUBMIT=true` and fails fast otherwise. It
+# is independent of `DELIVER_SUBMIT_FOR_REVIEW` (phased rollout is configured on the
+# version regardless of whether this run submits for review). `automatic_release`
+# stays false — phased release is the controlled alternative to an immediate
+# auto-release, not a companion to it.
 module DeliverOptions
   module_function
 
@@ -43,6 +51,7 @@ module DeliverOptions
       force:                      true,
       run_precheck_before_submit: false,
       submit_for_review:          submit_for_review?(env),
+      phased_release:             phased_release?(env),
       automatic_release:          false,
       verify_only:                !submit?(env),
     }
@@ -77,6 +86,28 @@ module DeliverOptions
             "for App Store review only makes sense during a live upload. Set " \
             "DELIVER_SUBMIT=true to go live, or unset DELIVER_SUBMIT_FOR_REVIEW to " \
             "validate only."
+    end
+    true
+  end
+
+  # Phased-release opt-in (slice 3): only an exact "true" (case-insensitive,
+  # whitespace-trimmed, mirroring DELIVER_SUBMIT) enables App Store phased release
+  # — the gradual, day-by-day rollout of an APPROVED version to users. Like
+  # submit-for-review it can only ride a live upload, so requesting it without
+  # DELIVER_SUBMIT=true is a misconfiguration — raise ArgumentError (fail fast) so
+  # a caller can't think they'll phase-release when they only validated. It is
+  # INDEPENDENT of DELIVER_SUBMIT_FOR_REVIEW: phased rollout is configured on the
+  # version regardless of whether this run also submits for review (Apple applies
+  # it once the version is approved + released), so the guard is on submit only.
+  # When the opt-in is unset/non-"true", it stays false regardless of the others.
+  def phased_release?(env)
+    return false unless env["DELIVER_PHASED_RELEASE"].to_s.strip.downcase == "true"
+
+    unless submit?(env)
+      raise ArgumentError,
+            "DELIVER_PHASED_RELEASE=true requires DELIVER_SUBMIT=true: a phased " \
+            "release only makes sense during a live upload. Set DELIVER_SUBMIT=true " \
+            "to go live, or unset DELIVER_PHASED_RELEASE to validate only."
     end
     true
   end
