@@ -5,6 +5,7 @@ require_relative "changelog_formatter"
 require_relative "coverage_gate"
 require_relative "deliver_options"
 require_relative "deliver_release_notes"
+require_relative "external_testflight_options"
 require_relative "release_plan"
 require_relative "version_bumper"
 
@@ -221,6 +222,23 @@ platform :ios do
       skip_waiting_for_build_processing: true,
       changelog: changelog_from_md
     )
+  end
+
+  desc "Distribute the latest TestFlight build to EXTERNAL tester groups (opt-in, OFF by default)"
+  lane :distribute_external do
+    # Distribute the already-uploaded build to EXTERNAL TestFlight groups. OFF by
+    # default: ExternalTestFlightOptions.build is pure + unit-tested (see
+    # test/external_testflight_lane_test.rb) and only sets distribute_external/groups
+    # when the caller opts in with TESTFLIGHT_DISTRIBUTE_EXTERNAL=true, so CI never
+    # pushes a build to external testers implicitly. The api_key (from the live
+    # asc_api_key helper) and changelog (from changelog_from_md, the same notes
+    # `beta` ships) are the only pieces built here and merged in — keeping every
+    # other option fastlane-free and testable.
+    setup_ci # non-interactive CI keychain/config, consistent with beta/deliver
+    pilot(**ExternalTestFlightOptions.build(ENV).merge(
+      api_key:   asc_api_key,
+      changelog: changelog_from_md
+    ))
   end
 end
 
