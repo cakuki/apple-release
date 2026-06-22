@@ -185,9 +185,9 @@ prints a plain-text **digest** so a rating drop surfaces early:
 - **Flagged low ratings** — every review at or below a threshold (default **2★**), listed with
   its rating, territory, and title so you can act on the complaints.
 
-> **It is READ-ONLY.** The lane only `GET`s `/v1/apps/{id}/customerReviews` using the same
-> App Store Connect API key as `beta`/`deliver`; it **never writes to App Store Connect** and
-> has no effect on your listing.
+> **It is READ-ONLY.** The lane only `GET`s App Store Connect — `/v1/apps?filter[bundleId]=…`
+> to resolve the app id, then `/v1/apps/{id}/customerReviews` — using the same App Store Connect
+> API key as `beta`/`deliver`; it **never writes to App Store Connect** and has no effect on your listing.
 
 Tune it via environment variables:
 

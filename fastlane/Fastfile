@@ -297,7 +297,10 @@ platform :ios do
     #   APP_IDENTIFIER                 required — which app's reviews to pull
     #   REVIEWS_SINCE                  optional ISO8601 — count "new since" this instant
     #   REVIEWS_LOW_RATING_THRESHOLD   optional Int (default 2) — flag ratings <= this
-    reviews = fetch_customer_reviews(ENV.fetch("APP_IDENTIFIER"))
+    # Validate ENV knobs FIRST, before any network I/O — a typo in REVIEWS_SINCE /
+    # REVIEWS_LOW_RATING_THRESHOLD should fail fast, not after fetching/paging ASC.
+    app_identifier = ENV.fetch("APP_IDENTIFIER").strip
+    UI.user_error!("APP_IDENTIFIER must not be blank") if app_identifier.empty?
 
     options = {}
     since = ENV["REVIEWS_SINCE"].to_s.strip
@@ -331,6 +334,9 @@ platform :ios do
       end
       options[:low_rating_threshold] = value
     end
+
+    # Inputs are known-good — now hit ASC.
+    reviews = fetch_customer_reviews(app_identifier)
 
     digest = ReviewDigest.build(reviews, options)
     UI.message(ReviewDigest.format(digest))
@@ -373,13 +379,12 @@ def fetch_customer_reviews(bundle_id)
   require "set"
 
   key = asc_api_key # { key_id:, issuer_id:, key: <PEM>, ... } from the live helper
-  token = asc_jwt(key)
 
   # URL-encode the bundle id into the query (reverse-DNS ids are simple, but encode
   # to stay valid if a value ever contains reserved characters).
   app_id = asc_get(
     "https://api.appstoreconnect.apple.com/v1/apps?filter[bundleId]=#{CGI.escape(bundle_id)}&limit=1",
-    token
+    key
   ).dig("data", 0, "id")
   UI.user_error!("No App Store Connect app found for bundle id #{bundle_id}") if app_id.nil?
 
@@ -394,7 +399,7 @@ def fetch_customer_reviews(bundle_id)
     # A repeated cursor means a server-side paging bug — fail fast rather than
     # loop forever OR silently return a partial set (which would look complete).
     UI.user_error!("ASC pagination returned a repeated cursor: #{url}") unless seen.add?(url)
-    page = asc_get(url, token)
+    page = asc_get(url, key)
     # Only collect Hash attributes; an unexpected payload shape would otherwise
     # push nil/non-Hash and crash ReviewDigest.build (which assumes Hashes).
     (page["data"] || []).each do |entry|
@@ -418,10 +423,14 @@ def asc_jwt(key)
   )
 end
 
-# GET a single ASC URL with the Bearer token and parse the JSON body. Raises on a
-# non-2xx so a failed fetch stops the lane (read-only, so nothing is left dirty).
-def asc_get(url, token)
+# GET a single ASC URL and parse the JSON body. Signs a FRESH JWT per call from
+# `key` (the asc_api_key Hash) rather than taking a pre-signed token: a long
+# pagination (many 200-item pages) can exceed a single token's 10-minute TTL and
+# 401 mid-run, so re-signing per request keeps it reliable. Raises on a non-2xx so
+# a failed fetch stops the lane (read-only, so nothing is left dirty).
+def asc_get(url, key)
   require "json"
+  require "uri"
   uri = URI(url)
   http = Net::HTTP.new(uri.host, uri.port)
   http.use_ssl = true
@@ -429,7 +438,7 @@ def asc_get(url, token)
   http.open_timeout = 15
   http.read_timeout = 30
   request = Net::HTTP::Get.new(uri)
-  request["Authorization"] = "Bearer #{token}"
+  request["Authorization"] = "Bearer #{asc_jwt(key)}"
   response = http.request(request)
   unless response.is_a?(Net::HTTPSuccess)
     # Include the full URI (path + query: filter/limit/sort) AND a truncated
@@ -439,11 +448,12 @@ def asc_get(url, token)
     body = response.body.to_s[0, 500]
     UI.user_error!("ASC GET #{uri} failed: #{response.code} #{response.message}\n#{body}")
   end
-  # A 2xx with a non-JSON body (e.g. a proxy injecting HTML) should be a clear
-  # fastlane error, not a raw JSON::ParserError stack trace.
+  # A 2xx with a non-JSON or empty body (e.g. a proxy injecting HTML, or a nil
+  # body) should be a clear fastlane error, not a raw JSON::ParserError/TypeError
+  # stack trace — parse the stringified body and rescue both.
   begin
-    JSON.parse(response.body)
-  rescue JSON::ParserError
+    JSON.parse(response.body.to_s)
+  rescue JSON::ParserError, TypeError
     UI.user_error!("ASC GET #{uri} returned a non-JSON body: #{response.body.to_s[0, 500]}")
   end
 end

@@ -9,7 +9,7 @@
 #   {
 #     total:         Int,            # how many reviews we have
 #     new_since:     Int | nil,      # count created strictly after options[:since]
-#     average:       Float | nil,    # mean rating, rounded to 2dp (nil if no reviews)
+#     average:       Float | nil,    # mean rating, rounded to 2dp (nil if no rated reviews)
 #     breakdown:     { 5=>Int, ..., 1=>Int },  # per-star counts, ALL stars present
 #     flagged:       [review_hash, ...],        # reviews with rating <= threshold
 #     flagged_count: Int,
@@ -31,8 +31,10 @@
 #     decimals is enough to make a drop visible (4.50 -> 4.33) without noise; no
 #     reviews => nil (NOT 0.0 / NaN), so "no data" never reads as a 0-star app.
 #   * The per-star breakdown is a Hash with EVERY star 1..5 present (zeros filled),
-#     so a consumer can index breakdown[1] without a nil-guard, and the values
-#     always sum to total.
+#     so a consumer can index breakdown[1] without a nil-guard. Its values sum to
+#     the count of validly-rated reviews — which equals `total` unless some reviews
+#     have a missing/out-of-range rating (those are dropped from average/breakdown
+#     but still counted in `total`).
 #   * Default low-rating threshold is 2: 1- and 2-star reviews are the early signal
 #     of a rating drop. Overridable via options[:low_rating_threshold]; flagged
 #     entries are the FULL review hashes so the lane can print title/body/territory.
@@ -95,8 +97,9 @@ module ReviewDigest
   private_class_method :average
 
   # Per-star counts as a Hash with EVERY star 1..5 present (zeros filled), in the
-  # canonical high->low order, so the values always sum to total and consumers
-  # never hit a missing key. Internal helper.
+  # canonical high->low order, so consumers never hit a missing key. `ratings` is
+  # already the validly-parsed ratings, so the values sum to the count of valid
+  # ratings (== total unless some reviews had an invalid/missing rating). Internal.
   def breakdown(ratings)
     counts = STARS.map { |star| [star, 0] }.to_h
     ratings.each { |r| counts[r] += 1 if counts.key?(r) }

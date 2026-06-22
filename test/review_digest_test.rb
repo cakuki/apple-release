@@ -98,7 +98,10 @@ class ReviewDigestTest < Minitest::Test
                  ReviewDigest.build(rs)[:breakdown])
   end
 
-  def test_breakdown_sums_to_total
+  def test_breakdown_sums_to_valid_rating_count
+    # With an all-valid fixture this equals total; the invariant is that breakdown
+    # sums to the number of validly-rated reviews (see the invalid-ratings test for
+    # the case where that's < total).
     digest = ReviewDigest.build(reviews)
     assert_equal digest[:total], digest[:breakdown].values.sum
   end
