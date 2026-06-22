@@ -63,10 +63,15 @@ module ReviewDigest
   def build(reviews, options = {})
     reviews   = Array(reviews)
     since     = options[:since]
-    threshold = (options[:low_rating_threshold] || DEFAULT_LOW_RATING_THRESHOLD).to_i
+    threshold = parse_rating(options[:low_rating_threshold]) || DEFAULT_LOW_RATING_THRESHOLD
 
-    ratings = reviews.map { |r| r["rating"].to_i }
-    flagged = reviews.select { |r| r["rating"].to_i <= threshold }
+    # Parse ratings explicitly and DROP unparseable/out-of-range ones (rather than
+    # `.to_i`, which silently turns a missing/garbage rating into 0 — skewing the
+    # average, adding a phantom flag, and breaking the breakdown sum). Consistent
+    # with parse_time's best-effort policy. ASC always sends 1..5, so in practice
+    # nothing is dropped; this is the defensive backstop.
+    ratings = reviews.map { |r| parse_rating(r["rating"]) }.compact
+    flagged = reviews.select { |r| (v = parse_rating(r["rating"])) && v <= threshold }
 
     {
       total:         reviews.length,
@@ -122,6 +127,19 @@ module ReviewDigest
 
   # Best-effort ISO8601 parse; nil on anything unparseable (so a bad createdDate
   # never crashes the digest and never counts as "new"). Internal helper.
+  # Parse a star rating to an Integer in 1..5, or nil if missing / non-numeric /
+  # out of range (best-effort, like parse_time). Accepts an Integer or a numeric
+  # String. Used for both review ratings and the flag threshold. Internal.
+  def parse_rating(value)
+    int =
+      case value
+      when Integer then value
+      when String  then Integer(value, exception: false)
+      end
+    int if int && (1..5).cover?(int)
+  end
+  private_class_method :parse_rating
+
   def parse_time(value)
     # Time.iso8601 (not the permissive Time.parse): both `createdDate` and the
     # `since` cutoff are documented ISO8601 instants, and iso8601 requires an

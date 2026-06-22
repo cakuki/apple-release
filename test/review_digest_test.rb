@@ -150,6 +150,30 @@ class ReviewDigestTest < Minitest::Test
     assert_equal [1, 2], flagged.map { |r| r["rating"] }.sort
   end
 
+  def test_invalid_or_missing_ratings_are_dropped_not_coerced_to_zero
+    # A missing/garbage rating must NOT become 0 (which would skew the average and
+    # get flagged). It's excluded from average/breakdown/flag; total still counts
+    # the review. Here: two valid 5★ + one bad rating => average 5.0, nothing flagged.
+    rs = [
+      review(rating: 5, created: "2026-06-01T00:00:00Z"),
+      review(rating: 5, created: "2026-06-02T00:00:00Z"),
+      review(rating: nil, created: "2026-06-03T00:00:00Z"),
+      review(rating: "x", created: "2026-06-04T00:00:00Z"),
+      review(rating: 0,   created: "2026-06-05T00:00:00Z"),
+    ]
+    digest = ReviewDigest.build(rs)
+    assert_equal 5, digest[:total]                       # all reviews counted
+    assert_equal 5.0, digest[:average]                   # only the two valid 5★
+    assert_equal 2, digest[:breakdown].values.sum        # breakdown over valid only
+    assert_equal 0, digest[:flagged_count]               # no 0/nil flagged
+  end
+
+  def test_numeric_string_rating_is_accepted
+    rs = [review(rating: "1", created: "2026-06-01T00:00:00Z")]
+    assert_equal 1, ReviewDigest.build(rs)[:flagged_count]
+    assert_equal 1.0, ReviewDigest.build(rs)[:average]
+  end
+
   def test_flagged_respects_custom_threshold
     # threshold 1 => only the 1-star; threshold 3 => 1/2/3-star.
     assert_equal [1],

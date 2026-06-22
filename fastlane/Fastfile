@@ -304,7 +304,7 @@ platform :ios do
     unless since.empty?
       # Validate up front so a typo fails fast with a clear message instead of
       # silently producing no "new since" line (ReviewDigest is best-effort and
-      # would just drop it). Parse with the same Time.parse the module uses.
+      # would just drop it). Uses the same Time.iso8601 as ReviewDigest.parse_time.
       require "time"
       begin
         # iso8601 (not parse): enforce the documented ISO8601 contract with an
