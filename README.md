@@ -9,7 +9,8 @@ workflow, and the signing-bootstrap script, so build/sign/release logic lives in
 - `sync_signing` — install signing assets via `match` (read-only on CI)
 - `prepare_release` — regenerate `CHANGELOG.md` (`cog changelog`), bump `MARKETING_VERSION`
   (semver, via `VersionBumper`), and create a `v<semver>` tag
-- `beta` — build + upload to TestFlight
+- `beta` — build + upload to TestFlight (optionally uploads dSYMs to Sentry — see
+  [Crash-report symbolication](#crash-report-symbolication-dsym-upload-to-sentry))
 
 Lanes are app-agnostic; per-app config arrives as environment variables set by the workflow.
 
@@ -75,5 +76,45 @@ jobs:
     with: { app-identifier: com.example.App, scheme: App, xcodeproj: App.xcodeproj }
     secrets: inherit
 ```
+
+### Crash-report symbolication (dSYM upload to Sentry)
+
+The `beta` lane can upload your build's dSYMs to **Sentry** so crash reports are
+symbolicated. It is **off by default and fully optional** — apps with no Sentry
+account ship to TestFlight exactly as before, and CI stays green.
+
+To enable it, set the **three required** values below for the app (any one
+missing/blank ⇒ the step is a clean no-op, never a failure); `sentry-url` is
+optional:
+
+| Where | Name | Required? | What |
+| --- | --- | --- | --- |
+| repo **secret** | `SENTRY_AUTH_TOKEN` | yes | Sentry auth token with dSYM-upload scope (never logged) |
+| workflow input | `sentry-org` | yes | your Sentry org slug |
+| workflow input | `sentry-project` | yes | your Sentry project slug |
+| workflow input | `sentry-url` | no | self-hosted instance base URL; omit for sentry.io |
+
+> **What gets uploaded:** the lane runs `sentry-cli debug-files upload --include-sources`, so in addition to the dSYMs it uploads **embedded source context** for your app's code where available — handy for readable stack traces, but be aware your source is sent to the configured Sentry/GlitchTip server.
+
+```yaml
+# .github/workflows/release.yml
+jobs:
+  ios:
+    uses: cakuki/apple-release/.github/workflows/apple-release.yml@v1
+    with:
+      app-identifier: com.example.App
+      scheme: App
+      xcodeproj: App.xcodeproj
+      sentry-org: your-org        # omit both to keep dSYM upload off
+      sentry-project: your-project
+    secrets: inherit              # SENTRY_AUTH_TOKEN flows in if the repo has it
+```
+
+The reporting backend is Sentry, but a self-hosted **GlitchTip** is a drop-in:
+nothing is hardcoded to `sentry.io`. Point `sentry-cli` at your instance by
+setting the **`sentry-url`** input (e.g. `https://glitchtip.example.com`) — it
+maps to `SENTRY_URL`, which sentry-cli reads natively — and keep using the same
+`SENTRY_AUTH_TOKEN`/`sentry-org`/`sentry-project`. Leave `sentry-url` empty for
+Sentry's SaaS (sentry.io).
 
 Architecture, signing, CI reference, and the new-app runbook live in the private `atelier` repo.

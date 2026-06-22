@@ -45,6 +45,21 @@ on:
         required: false
         type: string
         default: ""
+      sentry-org:
+        description: "Sentry (or GlitchTip) org slug for dSYM upload on the beta lane. OFF unless this AND sentry-project AND the SENTRY_AUTH_TOKEN secret are all set."
+        required: false
+        type: string
+        default: ""
+      sentry-project:
+        description: "Sentry (or GlitchTip) project slug for dSYM upload on the beta lane. OFF unless this AND sentry-org AND the SENTRY_AUTH_TOKEN secret are all set."
+        required: false
+        type: string
+        default: ""
+      sentry-url:
+        description: "Sentry server base URL for dSYM upload (sentry-cli SENTRY_URL). Leave empty for sentry.io (SaaS); set it to your instance (e.g. https://glitchtip.example.com) when using a self-hosted GlitchTip/Sentry."
+        required: false
+        type: string
+        default: ""
       xcode-version:
         description: "Xcode version to select (Apple requires the latest SDK for uploads)"
         required: false
@@ -71,6 +86,9 @@ on:
         required: true
       ASC_KEY_P8_BASE64:
         required: true
+      SENTRY_AUTH_TOKEN:
+        description: "Sentry (or GlitchTip) auth token for dSYM upload on the beta lane. OPTIONAL — absent => dSYM upload no-ops and the build still ships to TestFlight (never failed)."
+        required: false
 
 jobs:
   release:
@@ -85,6 +103,15 @@ jobs:
       DELIVER_PHASED_RELEASE: ${{ inputs.deliver-phased-release }}
       TESTFLIGHT_DISTRIBUTE_EXTERNAL: ${{ inputs.testflight-distribute-external }}
       TESTFLIGHT_GROUPS: ${{ inputs.testflight-groups }}
+      # Sentry dSYM upload (EPIC-06 s2): all optional. The beta lane no-ops unless
+      # the token + org + project are all present and non-blank (SentryDsymOptions),
+      # so an app with no Sentry account ships exactly as before and CI stays green.
+      SENTRY_ORG: ${{ inputs.sentry-org }}
+      SENTRY_PROJECT: ${{ inputs.sentry-project }}
+      # sentry-cli reads SENTRY_URL from the env natively; empty => sentry.io.
+      # Set it for a self-hosted GlitchTip/Sentry instance.
+      SENTRY_URL: ${{ inputs.sentry-url }}
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
       MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
       ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
@@ -120,6 +147,50 @@ jobs:
         with:
           path: ~/Library/Developer/Xcode/DerivedData
           key: deriveddata-${{ runner.os }}-${{ hashFiles('**/*.xcodeproj/**', '**/Package.resolved') }}
+
+      # The beta lane shells out to sentry-cli for dSYM upload (EPIC-06 s2) and
+      # GitHub's macOS runner images don't ship it, so install it first — but ONLY
+      # when Sentry is fully + USABLY configured, so an app with no Sentry account
+      # (or only a stray secret) adds zero install time and stays green.
+      #
+      # This step decides that, mirroring the lane's SentryDsymOptions EXACTLY:
+      # all three of token/org/project must be present AND not an unexpanded
+      # $(...)/${...} placeholder (which the lane treats as unset). Gating the
+      # install on this — rather than a bare non-empty check — keeps the install's
+      # condition identical to the lane's no-op condition, so a placeholder value
+      # doesn't waste time installing a CLI the lane won't use.
+      - name: Detect Sentry config
+        id: sentry
+        run: |
+          set -euo pipefail
+          usable() { # TRIMMED value is non-empty AND not a $(...)/${...} placeholder
+            local v="$1"
+            v="${v#"${v%%[![:space:]]*}"}"  # strip leading whitespace
+            v="${v%"${v##*[![:space:]]}"}"  # strip trailing whitespace
+            # shellcheck disable=SC2016  # single quotes are intentional: match
+            # the LITERAL $( / ${ of an unexpanded placeholder, not an expansion.
+            case "$v" in
+              "" | '$('*')' | '${'*'}') return 1 ;;
+              *) return 0 ;;
+            esac
+          }
+          if usable "${SENTRY_AUTH_TOKEN:-}" && usable "${SENTRY_ORG:-}" && usable "${SENTRY_PROJECT:-}"; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Install via Homebrew (preinstalled on GitHub macOS runners) rather than
+      # piping a remote `get-cli` script into a shell: this job has access to
+      # signing material + secrets, so we avoid executing an unauthenticated
+      # remote script. Homebrew fetches a checksummed bottle/formula from the
+      # official getsentry tap. Pin a specific version by editing this line if a
+      # reproducible build is required.
+      - name: Install sentry-cli (dSYM upload)
+        if: ${{ steps.sentry.outputs.enabled == 'true' }}
+        run: |
+          set -euo pipefail
+          brew install getsentry/tools/sentry-cli
 
       - name: Run fastlane
         run: bundle exec fastlane ${{ inputs.lane }}
