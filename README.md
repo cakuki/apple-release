@@ -11,6 +11,8 @@ workflow, and the signing-bootstrap script, so build/sign/release logic lives in
   (semver, via `VersionBumper`), and create a `v<semver>` tag
 - `beta` — build + upload to TestFlight (optionally uploads dSYMs to Sentry — see
   [Crash-report symbolication](#crash-report-symbolication-dsym-upload-to-sentry))
+- `screenshots` — capture App Store screenshots from UI tests (`snapshot`), optionally
+  add device frames (`frameit`). **Local only — never uploads** (see [Screenshots](#screenshots))
 
 Lanes are app-agnostic; per-app config arrives as environment variables set by the workflow.
 
@@ -116,5 +118,58 @@ setting the **`sentry-url`** input (e.g. `https://glitchtip.example.com`) — it
 maps to `SENTRY_URL`, which sentry-cli reads natively — and keep using the same
 `SENTRY_AUTH_TOKEN`/`sentry-org`/`sentry-project`. Leave `sentry-url` empty for
 Sentry's SaaS (sentry.io).
+
+## Screenshots
+
+The `screenshots` lane captures versioned App Store screenshots by driving your app's
+**UI-test target** on simulators (fastlane [`snapshot`](https://docs.fastlane.tools/actions/snapshot/)),
+and can optionally add **device frames** ([`frameit`](https://docs.fastlane.tools/actions/frameit/)).
+The [`ios-app-template`](https://github.com/cakuki/ios-app-template) ships a sample UI test
+(`{{APP_NAME}}UITests`) that takes one launch screenshot — replace it with your real flows.
+
+> **It is NON-LIVE.** The lane only writes images into a local output directory and **never
+> uploads to App Store Connect.** Uploading screenshots is a separate, owner-gated step (the
+> `deliver` slice). So running it has no effect on your live listing.
+
+Run it locally (from the app repo, with `SCHEME` set to a UI-test-capable scheme):
+
+```sh
+SCHEME=App-Dev bundle exec fastlane screenshots
+```
+
+It writes captures to `fastlane/screenshots/` (an HTML summary plus per-device/per-language
+PNGs). Tune it via environment variables (all optional):
+
+| Env var | Required? | Default | What |
+| --- | --- | --- | --- |
+| `SCHEME` | yes | — | scheme whose `test` action runs the UI-test target |
+| `SNAPSHOT_DEVICES` | no | `iPhone 16` | comma/newline-separated simulator device names |
+| `SNAPSHOT_LANGUAGES` | no | `en-US` | comma/newline-separated language codes |
+| `SNAPSHOT_OUTPUT_DIR` | no | `./screenshots` | where images are written (relative to `fastlane/`) |
+| `SNAPSHOT_FRAMES` / `FRAMEIT` | no | `false` | set `true` to run `frameit` and add device frames |
+| `XCODEPROJ` | no | inferred | path to the `.xcodeproj` (passed to snapshot when set) |
+
+frameit is **off by default** — device frames are heavy (extra assets) and opinionated (a
+specific marketing look), so bare screenshots are the default; opt in with `SNAPSHOT_FRAMES=true`.
+
+Via the reusable workflow, pass `lane: screenshots` and the optional `snapshot-*` inputs:
+
+```yaml
+# .github/workflows/screenshots.yml
+jobs:
+  shots:
+    uses: cakuki/apple-release/.github/workflows/apple-release.yml@v1
+    with:
+      app-identifier: com.example.App
+      scheme: App-Dev
+      xcodeproj: App.xcodeproj
+      lane: screenshots
+      snapshot-devices: "iPhone 16 Pro, iPad Pro (12.9-inch)"  # optional
+      snapshot-frames: "false"                                  # optional
+    secrets: inherit
+```
+
+The pure decision logic lives in `fastlane/snapshot_options.rb` (`SnapshotOptions.build` /
+`SnapshotOptions.frame?`) and is unit-tested fastlane-free in `test/snapshot_options_test.rb`.
 
 Architecture, signing, CI reference, and the new-app runbook live in the private `atelier` repo.
