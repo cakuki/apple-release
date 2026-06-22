@@ -286,8 +286,9 @@ platform :ios do
     # rating + per-star breakdown, and the low-rating reviews flagged at/below a
     # threshold so a rating drop surfaces early.
     #
-    # READ-ONLY: this lane only GETs `/v1/apps/{id}/customerReviews`; it NEVER
-    # writes to ASC. The digest math/text is pure + unit-tested (see
+    # READ-ONLY: this lane only GETs from ASC — `/v1/apps?filter[bundleId]=…` to
+    # resolve the app id, then `/v1/apps/{id}/customerReviews`; it NEVER writes to
+    # ASC. The digest math/text is pure + unit-tested (see
     # test/review_digest_test.rb) — ReviewDigest.build/format take already-parsed
     # review hashes and do no IO. The only untested surface is the fetch below
     # (the ASC GET), which we keep thin and isolated, exactly like the dSYM
