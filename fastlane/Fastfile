@@ -414,6 +414,8 @@ end
 # Sign a short-lived (10 min) ES256 JWT for App Store Connect from the fastlane
 # api_key Hash (key_id / issuer_id / PEM key). Thin I/O helper for `reviews`.
 def asc_jwt(key)
+  require "jwt"
+  require "openssl"
   now = Time.now.to_i
   JWT.encode(
     { iss: key[:issuer_id], iat: now, exp: now + 600, aud: "appstoreconnect-v1" },
@@ -429,6 +431,7 @@ end
 # 401 mid-run, so re-signing per request keeps it reliable. Raises on a non-2xx so
 # a failed fetch stops the lane (read-only, so nothing is left dirty).
 def asc_get(url, key)
+  require "net/http"
   require "json"
   require "uri"
   uri = URI(url)
