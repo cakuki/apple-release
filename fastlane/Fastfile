@@ -7,6 +7,7 @@ require_relative "deliver_options"
 require_relative "deliver_release_notes"
 require_relative "external_testflight_options"
 require_relative "release_plan"
+require_relative "review_digest"
 require_relative "sentry_dsym_options"
 require_relative "snapshot_options"
 require_relative "version_bumper"
@@ -277,12 +278,119 @@ platform :ios do
       frame_screenshots(path: opts[:output_directory])
     end
   end
+
+  desc "Pull the app's App Store customer reviews from ASC and print a digest (READ-ONLY)"
+  lane :reviews do
+    # Market-tracking (EPIC-10): fetch this app's App Store customer reviews from
+    # App Store Connect and print a digest — total + new-since count, average
+    # rating + per-star breakdown, and the low-rating reviews flagged at/below a
+    # threshold so a rating drop surfaces early.
+    #
+    # READ-ONLY: this lane only GETs `/v1/apps/{id}/customerReviews`; it NEVER
+    # writes to ASC. The digest math/text is pure + unit-tested (see
+    # test/review_digest_test.rb) — ReviewDigest.build/format take already-parsed
+    # review hashes and do no IO. The only untested surface is the fetch below
+    # (the ASC GET), which we keep thin and isolated, exactly like the dSYM
+    # shell-out in `beta`. It is NOT exercised in CI's unit suite (no live ASC).
+    #
+    # Knobs (ENV, like the other lanes):
+    #   APP_IDENTIFIER                 required — which app's reviews to pull
+    #   REVIEWS_SINCE                  optional ISO8601 — count "new since" this instant
+    #   REVIEWS_LOW_RATING_THRESHOLD   optional Int (default 2) — flag ratings <= this
+    reviews = fetch_customer_reviews(ENV.fetch("APP_IDENTIFIER"))
+
+    options = {}
+    since = ENV["REVIEWS_SINCE"].to_s.strip
+    options[:since] = since unless since.empty?
+    threshold = ENV["REVIEWS_LOW_RATING_THRESHOLD"].to_s.strip
+    options[:low_rating_threshold] = Integer(threshold) unless threshold.empty?
+
+    digest = ReviewDigest.build(reviews, options)
+    UI.message(ReviewDigest.format(digest))
+  end
 end
 
 # Top CHANGELOG.md section -> clean TestFlight notes (or "Automated build").
 # Logic lives in changelog_formatter.rb so it's unit-tested without fastlane.
 def changelog_from_md
   ChangelogFormatter.from_file("../CHANGELOG.md")
+end
+
+# Fetch the app's App Store customer reviews from App Store Connect for the
+# `reviews` lane (EPIC-10, cakuki/atelier#125). Returns the array of
+# `data[].attributes` hashes (rating/title/body/reviewerNickname/createdDate/
+# territory) that the PURE, unit-tested ReviewDigest.build consumes — this helper
+# is the thin, untested I/O boundary (the ASC GET), the same way
+# upload_dsyms_to_sentry is the thin shell-out around the pure SentryDsymOptions.
+#
+# READ-ONLY: only HTTP GETs against ASC; never writes. We do a documented RAW ASC
+# API call rather than spaceship's review listing: spaceship's ConnectAPI does not
+# expose customer reviews consistently across fastlane versions, whereas the public
+# `/v1/apps/{id}/customerReviews` endpoint is stable and lets us page deterministically.
+# (Reversible TL call — swapping in spaceship later only touches this helper.)
+#
+# AUTH: we reuse the SAME ASC identity as beta/deliver. `asc_api_key` returns the
+# fastlane api_key Hash; we sign a short-lived ES256 JWT from its key_id/issuer_id/
+# key (per Apple's "Generating Tokens for API Requests") and send it as a Bearer.
+# The ASC app RESOURCE id (needed in the path) is resolved from the bundle id via
+# `/v1/apps?filter[bundleId]=`.
+#
+# This whole method is live ASC I/O and is NOT exercised by the unit suite (no
+# creds in CI, and hitting Apple is forbidden) — the tested surface is the digest.
+def fetch_customer_reviews(bundle_id)
+  require "jwt"
+  require "net/http"
+  require "json"
+  require "base64"
+  require "openssl"
+
+  key = asc_api_key # { key_id:, issuer_id:, key: <PEM>, ... } from the live helper
+  token = asc_jwt(key)
+
+  app_id = asc_get(
+    "https://api.appstoreconnect.apple.com/v1/apps?filter[bundleId]=#{bundle_id}&limit=1",
+    token
+  ).dig("data", 0, "id")
+  UI.user_error!("No App Store Connect app found for bundle id #{bundle_id}") if app_id.nil?
+
+  # Page through customerReviews (ASC caps `limit` at 200), following the JSON:API
+  # `links.next` cursor until exhausted, newest first.
+  url = "https://api.appstoreconnect.apple.com/v1/apps/#{app_id}/customerReviews" \
+        "?limit=200&sort=-createdDate"
+  reviews = []
+  while url
+    page = asc_get(url, token)
+    (page["data"] || []).each { |entry| reviews << entry["attributes"] }
+    url = page.dig("links", "next")
+  end
+  reviews
+end
+
+# Sign a short-lived (10 min) ES256 JWT for App Store Connect from the fastlane
+# api_key Hash (key_id / issuer_id / PEM key). Thin I/O helper for `reviews`.
+def asc_jwt(key)
+  now = Time.now.to_i
+  JWT.encode(
+    { iss: key[:issuer_id], iat: now, exp: now + 600, aud: "appstoreconnect-v1" },
+    OpenSSL::PKey::EC.new(key[:key]),
+    "ES256",
+    { kid: key[:key_id], typ: "JWT" }
+  )
+end
+
+# GET a single ASC URL with the Bearer token and parse the JSON body. Raises on a
+# non-2xx so a failed fetch stops the lane (read-only, so nothing is left dirty).
+def asc_get(url, token)
+  uri = URI(url)
+  http = Net::HTTP.new(uri.host, uri.port)
+  http.use_ssl = true
+  request = Net::HTTP::Get.new(uri)
+  request["Authorization"] = "Bearer #{token}"
+  response = http.request(request)
+  unless response.is_a?(Net::HTTPSuccess)
+    UI.user_error!("ASC GET #{uri.path} failed: #{response.code} #{response.message}")
+  end
+  JSON.parse(response.body)
 end
 
 # Upload the dSYMs gym just produced to Sentry so crash reports are symbolicated
