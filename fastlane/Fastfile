@@ -307,14 +307,30 @@ platform :ios do
       # would just drop it). Parse with the same Time.parse the module uses.
       require "time"
       begin
-        Time.parse(since)
+        # iso8601 (not parse): enforce the documented ISO8601 contract with an
+        # explicit offset, matching ReviewDigest's parse_time.
+        Time.iso8601(since)
       rescue ArgumentError
-        UI.user_error!("REVIEWS_SINCE must be a parseable timestamp (e.g. 2026-06-01T00:00:00Z); got: #{since.inspect}")
+        UI.user_error!("REVIEWS_SINCE must be an ISO8601 instant with an offset (e.g. 2026-06-01T00:00:00Z); got: #{since.inspect}")
       end
       options[:since] = since
     end
     threshold = ENV["REVIEWS_LOW_RATING_THRESHOLD"].to_s.strip
-    options[:low_rating_threshold] = Integer(threshold) unless threshold.empty?
+    unless threshold.empty?
+      # Parse + range-check so a typo or out-of-range value fails fast with a clear
+      # message instead of an Integer() stack trace. Ratings are 1..5, so the flag
+      # threshold must be in that range.
+      value =
+        begin
+          Integer(threshold)
+        rescue ArgumentError
+          UI.user_error!("REVIEWS_LOW_RATING_THRESHOLD must be an integer 1..5; got: #{threshold.inspect}")
+        end
+      unless (1..5).cover?(value)
+        UI.user_error!("REVIEWS_LOW_RATING_THRESHOLD must be in 1..5 (star ratings); got: #{value}")
+      end
+      options[:low_rating_threshold] = value
+    end
 
     digest = ReviewDigest.build(reviews, options)
     UI.message(ReviewDigest.format(digest))
@@ -401,9 +417,12 @@ def asc_get(url, token)
   request["Authorization"] = "Bearer #{token}"
   response = http.request(request)
   unless response.is_a?(Net::HTTPSuccess)
-    # Log the full URI (path + query: filter/limit/sort) for diagnosability — the
-    # Bearer token is in the request headers, not the URL, so this leaks nothing.
-    UI.user_error!("ASC GET #{uri} failed: #{response.code} #{response.message}")
+    # Include the full URI (path + query: filter/limit/sort) AND a truncated
+    # response body — ASC error bodies carry the actionable JSON:API `errors`
+    # (the auth/filter reason). The Bearer token is in the request headers, not
+    # the URL or the response, so this leaks nothing.
+    body = response.body.to_s[0, 500]
+    UI.user_error!("ASC GET #{uri} failed: #{response.code} #{response.message}\n#{body}")
   end
   JSON.parse(response.body)
 end

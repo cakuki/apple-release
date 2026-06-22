@@ -123,7 +123,11 @@ module ReviewDigest
   # Best-effort ISO8601 parse; nil on anything unparseable (so a bad createdDate
   # never crashes the digest and never counts as "new"). Internal helper.
   def parse_time(value)
-    Time.parse(value.to_s)
+    # Time.iso8601 (not the permissive Time.parse): both `createdDate` and the
+    # `since` cutoff are documented ISO8601 instants, and iso8601 requires an
+    # explicit offset so comparisons are always on absolute instants rather than
+    # the runner's local zone. Anything non-ISO8601 => nil (best-effort).
+    Time.iso8601(value.to_s)
   rescue ArgumentError, TypeError
     nil
   end
